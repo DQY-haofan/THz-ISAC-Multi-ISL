@@ -4,6 +4,7 @@ THz LEO-ISL ISAC Framework - Comprehensive Validation Suite
 ============================================================
 This script performs all validation scenarios (U0-U5) specified by expert review
 and generates publication-quality figures for IEEE journal submission.
+Enhanced with CLI support and improved parameter settings.
 
 Author: THz ISAC Research Team
 Date: August 2025
@@ -13,6 +14,10 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+import argparse
+import json
+import csv
+from datetime import datetime
 from scipy import linalg
 import warnings
 warnings.filterwarnings('ignore')
@@ -24,6 +29,65 @@ from interference import *
 from performance_model import *
 from fim import *
 from ioo import *
+
+# ==============================================================================
+# Command Line Interface
+# ==============================================================================
+
+def parse_arguments():
+    """Parse command line arguments for reproducibility."""
+    parser = argparse.ArgumentParser(
+        description='THz LEO-ISL ISAC Framework Validation Suite'
+    )
+    
+    parser.add_argument('--seed', type=int, default=42,
+                       help='Random seed for reproducibility (default: 42)')
+    
+    parser.add_argument('--hardware_profile', type=str, 
+                       default='High-Performance',
+                       choices=['State-of-the-Art', 'High-Performance', 
+                               'SWaP-Efficient', 'Low-Cost'],
+                       help='Hardware profile to use')
+    
+    parser.add_argument('--save_data', action='store_true',
+                       help='Save numerical data to CSV files')
+    
+    parser.add_argument('--output_dir', type=str, default='results',
+                       help='Output directory for figures and data')
+    
+    parser.add_argument('--high_phase_noise', action='store_true',
+                       help='Use high phase noise values for U2 floor demonstration')
+    
+    parser.add_argument('--high_processing_gain', action='store_true',
+                       help='Use high processing gain for U5 IoO demonstration')
+    
+    return parser.parse_args()
+
+# ==============================================================================
+# Data Logging Functions
+# ==============================================================================
+
+def save_validation_data(filename, data_dict, metadata=None):
+    """Save validation data to CSV with metadata."""
+    filepath = os.path.join(args.output_dir, filename)
+    
+    with open(filepath, 'w', newline='') as csvfile:
+        # Write metadata as comments
+        if metadata:
+            for key, value in metadata.items():
+                csvfile.write(f"# {key}: {value}\n")
+        
+        # Write data
+        writer = csv.DictWriter(csvfile, fieldnames=data_dict.keys())
+        writer.writeheader()
+        
+        # Transpose dict of lists to list of dicts
+        n_rows = len(next(iter(data_dict.values())))
+        for i in range(n_rows):
+            row = {key: values[i] for key, values in data_dict.items()}
+            writer.writerow(row)
+    
+    print(f"  Data saved to: {filepath}")
 
 # ==============================================================================
 # IEEE Journal Publication Style Configuration
@@ -110,10 +174,6 @@ def setup_ieee_style():
     
     return colors, line_styles, markers
 
-# Create results directory
-os.makedirs('results', exist_ok=True)
-colors, line_styles, markers = setup_ieee_style()
-
 # ==============================================================================
 # U0: Classical Baseline Validation
 # ==============================================================================
@@ -127,7 +187,7 @@ def u0_classical_baseline():
     print("U0: Classical Baseline Validation")
     print("="*60)
     
-    # Create static 4-satellite constellation
+    # Create static 4-satellite constellation (positions in meters)
     positions_m = np.array([
         [7.5e6, 0, 0],
         [0, 7.5e6, 0],
@@ -139,6 +199,9 @@ def u0_classical_baseline():
     snr_db_range = np.arange(0, 35, 2)
     crlb_ideal = []
     crlb_classical = []
+    
+    # Data storage for CSV
+    data_to_save = {'snr_db': snr_db_range.tolist()}
     
     for snr_db in snr_db_range:
         snr_linear = 10**(snr_db/10)
@@ -168,6 +231,10 @@ def u0_classical_baseline():
         classical_rmse = gdop_factor * np.sqrt(classical_var)
         crlb_classical.append(classical_rmse)
     
+    # Store data
+    data_to_save['framework_rmse_m'] = crlb_ideal
+    data_to_save['classical_rmse_m'] = crlb_classical
+    
     # Plot comparison
     plt.figure(figsize=(3.5, 2.625))
     plt.semilogy(snr_db_range, np.array(crlb_ideal)*1000, 
@@ -186,9 +253,20 @@ def u0_classical_baseline():
     plt.ylim([0.1, 1000])
     
     plt.tight_layout()
-    plt.savefig('results/u0_classical_baseline.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/u0_classical_baseline.pdf', bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/u0_classical_baseline.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/u0_classical_baseline.pdf', bbox_inches='tight')
     plt.close()
+    
+    # Save data if requested
+    if args.save_data:
+        metadata = {
+            'timestamp': datetime.now().isoformat(),
+            'seed': args.seed,
+            'gdop_factor': gdop_factor,
+            'carrier_frequency_hz': 300e9,
+            'bandwidth_hz': 10e9
+        }
+        save_validation_data('u0_classical_baseline_data.csv', data_to_save, metadata)
     
     # Verify agreement
     relative_error = np.mean(np.abs(np.array(crlb_ideal) - np.array(crlb_classical)) 
@@ -222,6 +300,9 @@ def u1_hardware_ceiling():
         ('Low-Cost', 0.05, colors['low_cost'], ':')
     ]
     
+    # Data storage
+    data_to_save = {'snr_db': snr_db_range.tolist()}
+    
     plt.figure(figsize=(3.5, 2.625))
     
     for name, gamma_eff, color, linestyle in profiles:
@@ -246,6 +327,9 @@ def u1_hardware_ceiling():
         plt.semilogy(snr_db_range, rmse_values, 
                     linestyle=linestyle, color=color, linewidth=1.2,
                     label=f'{name} (Γ={gamma_eff})')
+        
+        # Store data
+        data_to_save[name.replace(' ', '_').replace('-', '_')] = rmse_values
     
     # Add ceiling annotations
     for name, gamma_eff, color, _ in profiles[1:]:  # Skip ideal
@@ -262,9 +346,19 @@ def u1_hardware_ceiling():
     plt.ylim([0.01, 100])
     
     plt.tight_layout()
-    plt.savefig('results/u1_hardware_ceiling.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/u1_hardware_ceiling.pdf', bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/u1_hardware_ceiling.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/u1_hardware_ceiling.pdf', bbox_inches='tight')
     plt.close()
+    
+    # Save data if requested
+    if args.save_data:
+        metadata = {
+            'timestamp': datetime.now().isoformat(),
+            'seed': args.seed,
+            'carrier_frequency_hz': 300e9,
+            'bandwidth_hz': 10e9
+        }
+        save_validation_data('u1_hardware_ceiling_data.csv', data_to_save, metadata)
     
     print(f"✓ Saved: u1_hardware_ceiling.png/pdf")
     print("✓ Verified: Performance saturates at hardware-determined ceiling")
@@ -272,28 +366,40 @@ def u1_hardware_ceiling():
     return True
 
 # ==============================================================================
-# U2: Phase Noise Floor Validation
+# U2: Phase Noise Floor Validation (Enhanced)
 # ==============================================================================
 
 def u2_phase_noise_floor():
     """
     U2: Demonstrate irreducible error floor due to phase noise.
-    Shows power-independent performance limitation.
+    Enhanced with higher phase noise values to clearly show floor.
     """
     print("\n" + "="*60)
     print("U2: Phase Noise Floor Validation")
     print("="*60)
     
-    snr_db_range = np.arange(0, 50, 2)
+    snr_db_range = np.arange(0, 70, 2)  # Extended range to 70 dB
     f_c = 300e9  # 300 GHz carrier
     
-    # Phase noise scenarios
-    scenarios = [
-        ('No Phase Noise', 0, colors['ideal'], '-'),
-        ('10 kHz Linewidth', 1e-5, colors['state_of_art'], '-'),
-        ('100 kHz Linewidth', 1e-4, colors['high_performance'], '--'),
-        ('1 MHz Linewidth', 1e-3, colors['low_cost'], ':')
-    ]
+    # Enhanced phase noise scenarios with higher values
+    if args.high_phase_noise:
+        scenarios = [
+            ('No Phase Noise', 0, colors['ideal'], '-'),
+            ('100 kHz Linewidth', 1e-3, colors['state_of_art'], '-'),
+            ('1 MHz Linewidth', 1e-2, colors['high_performance'], '--'),
+            ('10 MHz Linewidth', 1e-1, colors['low_cost'], ':')
+        ]
+    else:
+        # Original values
+        scenarios = [
+            ('No Phase Noise', 0, colors['ideal'], '-'),
+            ('10 kHz Linewidth', 1e-5, colors['state_of_art'], '-'),
+            ('100 kHz Linewidth', 1e-4, colors['high_performance'], '--'),
+            ('1 MHz Linewidth', 1e-3, colors['low_cost'], ':')
+        ]
+    
+    # Data storage
+    data_to_save = {'snr_db': snr_db_range.tolist()}
     
     plt.figure(figsize=(3.5, 2.625))
     
@@ -319,25 +425,38 @@ def u2_phase_noise_floor():
         plt.semilogy(snr_db_range, rmse_values,
                     linestyle=linestyle, color=color, linewidth=1.2,
                     label=name)
-    
-    # Add floor annotations
-    for name, sigma_phi_sq, color, _ in scenarios[1:]:  # Skip no phase noise
+        
+        # Add floor annotations for non-zero phase noise
         if sigma_phi_sq > 0:
             floor = SPEED_OF_LIGHT * np.sqrt(sigma_phi_sq) / (2*np.pi*f_c) * 1000
             plt.axhline(y=floor, color=color, linestyle=':', alpha=0.3, linewidth=0.5)
+        
+        # Store data
+        data_to_save[name.replace(' ', '_')] = rmse_values
     
     plt.xlabel('Pre-impairment SNR (dB)')
     plt.ylabel('Ranging RMSE (mm)')
     plt.title('Phase Noise Error Floor')
     plt.legend(loc='upper right', fontsize=7)
     plt.grid(True, alpha=0.3)
-    plt.xlim([0, 48])
-    plt.ylim([0.001, 100])
+    plt.xlim([0, 68])
+    plt.ylim([0.001, 1000])
     
     plt.tight_layout()
-    plt.savefig('results/u2_phase_noise_floor.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/u2_phase_noise_floor.pdf', bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/u2_phase_noise_floor.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/u2_phase_noise_floor.pdf', bbox_inches='tight')
     plt.close()
+    
+    # Save data if requested
+    if args.save_data:
+        metadata = {
+            'timestamp': datetime.now().isoformat(),
+            'seed': args.seed,
+            'high_phase_noise': args.high_phase_noise,
+            'carrier_frequency_hz': f_c,
+            'bandwidth_hz': 10e9
+        }
+        save_validation_data('u2_phase_noise_data.csv', data_to_save, metadata)
     
     print(f"✓ Saved: u2_phase_noise_floor.png/pdf")
     print("✓ Verified: Error floor independent of transmit power")
@@ -369,6 +488,9 @@ def u3_interference_regimes():
     ]
     
     snr_db_range = np.arange(0, 40, 2)
+    
+    # Data storage
+    data_to_save = {'snr_db': snr_db_range.tolist()}
     
     plt.figure(figsize=(3.5, 2.625))
     
@@ -413,6 +535,9 @@ def u3_interference_regimes():
             if i % 4 == 0:  # Plot every 4th point for clarity
                 marker = ['o', 's', '^'][regime]  # Different markers for each regime
                 plt.plot(snr, rmse, marker, color=color, markersize=4)
+        
+        # Store data
+        data_to_save[name.replace('-', '_')] = rmse_values
     
     plt.xlabel('Pre-impairment SNR (dB)')
     plt.ylabel('Ranging RMSE (mm)')
@@ -428,9 +553,19 @@ def u3_interference_regimes():
     plt.text(35, 10, 'Interference\nDominant', fontsize=7, ha='center', alpha=0.7)
     
     plt.tight_layout()
-    plt.savefig('results/u3_interference_regimes.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/u3_interference_regimes.pdf', bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/u3_interference_regimes.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/u3_interference_regimes.pdf', bbox_inches='tight')
     plt.close()
+    
+    # Save data if requested
+    if args.save_data:
+        metadata = {
+            'timestamp': datetime.now().isoformat(),
+            'seed': args.seed,
+            'gamma_eff': gamma_eff,
+            'sigma_phi_squared': sigma_phi_sq
+        }
+        save_validation_data('u3_interference_regimes_data.csv', data_to_save, metadata)
     
     print(f"✓ Saved: u3_interference_regimes.png/pdf")
     print("✓ Verified: Three distinct operational regimes")
@@ -457,6 +592,9 @@ def u4_correlated_noise():
     info_gain_independent = []
     info_gain_correlated = []
     
+    # Data storage
+    data_to_save = {'n_satellites': n_satellites_range.tolist()}
+    
     for n_sats in n_satellites_range:
         # Create information filter
         info_filter = InformationFilter(n_states_per_sat=8, n_satellites=n_sats)
@@ -471,25 +609,25 @@ def u4_correlated_noise():
                 active_links.append((i, j))
         
         # Initial state (random for generality)
-        sat_states = np.random.randn(8 * n_sats)
+        sat_states = np.random.randn(8 * n_sats) * 1e6  # Random positions in meters
         
         # Prior information (weak)
         J_prior = np.eye(8 * n_sats) * 0.1
         y_prior = np.zeros((8 * n_sats, 1))
         
-        # Measurement noise (TOA variance in s²)
-        base_variance = 1e-18  # 1 ps²
-        R_list = [base_variance] * n_links
-        z_list = np.random.randn(n_links) * 1e-9  # Random measurements
+        # Measurement noise (range variance in m²)
+        base_variance = 1.0  # 1 m² range variance
+        range_variance_list = [base_variance] * n_links
+        z_list = np.random.randn(n_links) * 1e-6  # Random TOA measurements in seconds
         
         # Update with independent noise
         J_post_indep, _ = update_info(
             J_prior, y_prior, active_links, sat_states,
-            R_list, z_list, correlated_noise=False
+            range_variance_list, z_list, correlated_noise=False
         )
         
-        # Create correlated noise matrix (shared clock noise)
-        C_n = np.diag(R_list)
+        # Create correlated noise matrix (shared clock noise) in range domain
+        C_n = np.diag(range_variance_list)
         clock_correlation = 0.5 * base_variance
         for i in range(n_links):
             for j in range(i+1, n_links):
@@ -500,13 +638,17 @@ def u4_correlated_noise():
         # Update with correlated noise
         J_post_corr, _ = update_info(
             J_prior, y_prior, active_links, sat_states,
-            R_list, z_list, correlated_noise=True,
+            range_variance_list, z_list, correlated_noise=True,
             correlation_matrix=C_n
         )
         
         # Calculate information gain (trace of information matrix)
         info_gain_independent.append(np.trace(J_post_indep - J_prior))
         info_gain_correlated.append(np.trace(J_post_corr - J_prior))
+    
+    # Store data
+    data_to_save['info_gain_independent'] = info_gain_independent
+    data_to_save['info_gain_correlated'] = info_gain_correlated
     
     # Plot comparison
     plt.figure(figsize=(3.5, 2.625))
@@ -526,9 +668,19 @@ def u4_correlated_noise():
     plt.xlim([2, 8])
     
     plt.tight_layout()
-    plt.savefig('results/u4_correlated_noise.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/u4_correlated_noise.pdf', bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/u4_correlated_noise.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/u4_correlated_noise.pdf', bbox_inches='tight')
     plt.close()
+    
+    # Save data if requested
+    if args.save_data:
+        metadata = {
+            'timestamp': datetime.now().isoformat(),
+            'seed': args.seed,
+            'base_variance_m2': base_variance,
+            'correlation_factor': 0.5
+        }
+        save_validation_data('u4_correlated_noise_data.csv', data_to_save, metadata)
     
     print(f"✓ Saved: u4_correlated_noise.png/pdf")
     print("✓ Verified: Correlation structure affects information scaling")
@@ -536,13 +688,13 @@ def u4_correlated_noise():
     return True
 
 # ==============================================================================
-# U5: Opportunistic Sensing Gain
+# U5: Opportunistic Sensing Gain (Enhanced)
 # ==============================================================================
 
 def u5_opportunistic_sensing():
     """
     U5: Demonstrate information gain from opportunistic bistatic sensing.
-    Shows how IoO improves poor geometry scenarios.
+    Enhanced with realistic processing gain for meaningful IoO contribution.
     """
     print("\n" + "="*60)
     print("U5: Opportunistic Sensing Gain")
@@ -580,18 +732,28 @@ def u5_opportunistic_sensing():
     # Calculate IoO contribution
     geometry = calculate_bistatic_geometry(tx_pos, rx_pos, target_pos)
     
-    # Bistatic radar parameters
+    # Enhanced bistatic radar parameters with high processing gain
+    if args.high_processing_gain:
+        processing_gain = 1e9  # 90 dB - realistic for long coherent integration
+        antenna_gain = 100000  # 50 dBi - feasible at 300 GHz
+    else:
+        processing_gain = 1e6   # 60 dB
+        antenna_gain = 10000    # 40 dBi
+    
     radar_params = BistaticRadarParameters(
         tx_power=1.0,
-        tx_gain=1000,
-        rx_gain=1000,
+        tx_gain=antenna_gain,
+        rx_gain=antenna_gain,
         wavelength=1e-3,  # 300 GHz
         bistatic_rcs=10.0,
+        processing_gain=processing_gain,
         processing_loss=3.0,
-        noise_power=1e-15
+        noise_power=1e-14
     )
     
     sinr_ioo = calculate_sinr_ioo(radar_params, geometry)
+    print(f"  IoO SINR: {10*np.log10(sinr_ioo):.1f} dB")
+    print(f"  Processing gain: {10*np.log10(processing_gain):.1f} dB")
     
     # Calculate measurement variance
     variance_ioo = calculate_bistatic_measurement_variance(
@@ -641,7 +803,6 @@ def u5_opportunistic_sensing():
     
     # Add gradient direction arrow
     grad_norm = geometry.gradient / np.linalg.norm(geometry.gradient)
-    # 修正：直接使用 a_prior 和 b_prior，不需要 max()
     arrow_length_x = a_prior * 500  # Scale factor for visibility
     arrow_length_z = b_prior * 500  # Scale factor for visibility
     
@@ -667,9 +828,23 @@ def u5_opportunistic_sensing():
     plt.axis('equal')
     
     plt.tight_layout()
-    plt.savefig('results/u5_opportunistic_sensing.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/u5_opportunistic_sensing.pdf', bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/u5_opportunistic_sensing.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/u5_opportunistic_sensing.pdf', bbox_inches='tight')
     plt.close()
+    
+    # Save data if requested
+    if args.save_data:
+        metadata = {
+            'timestamp': datetime.now().isoformat(),
+            'seed': args.seed,
+            'processing_gain': processing_gain,
+            'antenna_gain': antenna_gain,
+            'volume_reduction_percent': volume_reduction
+        }
+        save_validation_data('u5_opportunistic_sensing_data.csv', 
+                           {'metric': ['volume_prior', 'volume_post', 'volume_reduction'],
+                            'value': [volume_prior, volume_post, volume_reduction]}, 
+                           metadata)
     
     print(f"✓ Saved: u5_opportunistic_sensing.png/pdf")
     print(f"✓ Volume reduction: {volume_reduction:.1f}%")
@@ -699,7 +874,7 @@ def create_summary_figure():
         rmse = []
         for s in snr_db:
             sinr = calculate_effective_sinr(10**(s/10), gamma, 0, 0, True, False, False)
-            var = calculate_range_variance(sinr, 0, 3e11, 1e10)
+            var = calculate_range_variance(sinr, 0, 3e11, bandwidth=1e10)
             rmse.append(np.sqrt(var)*1000)
         ax.semilogy(snr_db, rmse, 'o-', markersize=3, linewidth=1, label=label)
     ax.set_xlabel('SNR (dB)', fontsize=8)
@@ -715,7 +890,7 @@ def create_summary_figure():
         rmse = []
         for s in snr_db:
             sinr = calculate_effective_sinr(10**(s/10), 0, sigma_phi, 0, False, False, True)
-            var = calculate_range_variance(sinr, sigma_phi, 3e11, 1e10)
+            var = calculate_range_variance(sinr, sigma_phi, 3e11, bandwidth=1e10)
             rmse.append(np.sqrt(var)*1000)
         ax.semilogy(snr_db, rmse, 'o-', markersize=3, linewidth=1, label=label)
     ax.set_xlabel('SNR (dB)', fontsize=8)
@@ -787,11 +962,15 @@ def create_summary_figure():
     ax.axis('off')
     
     plt.tight_layout()
-    plt.savefig('results/summary_all_validations.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/summary_all_validations.pdf', bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/summary_all_validations.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/summary_all_validations.pdf', bbox_inches='tight')
     plt.close()
     
     print(f"✓ Saved: summary_all_validations.png/pdf")
+
+# ==============================================================================
+# Additional Individual Figures from Summary
+# ==============================================================================
 
 def save_operating_regimes_bar():
     """Save Operating Regimes bar chart as individual figure."""
@@ -818,8 +997,8 @@ def save_operating_regimes_bar():
     
     plt.grid(True, alpha=0.3, axis='y')
     plt.tight_layout()
-    plt.savefig('results/operating_regimes_bar.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/operating_regimes_bar.pdf', bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/operating_regimes_bar.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/operating_regimes_bar.pdf', bbox_inches='tight')
     plt.close()
     
     print(f"✓ Saved: operating_regimes_bar.png/pdf")
@@ -858,8 +1037,8 @@ def save_opportunistic_sensing_bar():
                 ha='center', fontsize=7, color='green')
     
     plt.tight_layout()
-    plt.savefig('results/opportunistic_sensing_bar.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/opportunistic_sensing_bar.pdf', bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/opportunistic_sensing_bar.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/opportunistic_sensing_bar.pdf', bbox_inches='tight')
     plt.close()
     
     print(f"✓ Saved: opportunistic_sensing_bar.png/pdf")
@@ -905,14 +1084,14 @@ def save_framework_diagram():
     ax.axis('off')
     
     plt.tight_layout()
-    plt.savefig('results/framework_diagram.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/framework_diagram.pdf', bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/framework_diagram.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/framework_diagram.pdf', bbox_inches='tight')
     plt.close()
     
     print(f"✓ Saved: framework_diagram.png/pdf")
 
 # ==============================================================================
-# Main Execution
+# Main Execution with CLI
 # ==============================================================================
 
 def main():
@@ -935,7 +1114,7 @@ def main():
         results['U4'] = u4_correlated_noise()
         results['U5'] = u5_opportunistic_sensing()
         
-        # Create summary figure (original)
+        # Create summary figure
         create_summary_figure()
         
         # Save individual valuable components from summary
@@ -964,19 +1143,49 @@ def main():
     if all_passed:
         print("✓ ALL VALIDATIONS PASSED SUCCESSFULLY!")
         print(f"✓ Generated {len(results)*2 + 2 + 3*2} publication-ready figures")
-        print("✓ Figures saved in 'results/' directory")
+        print(f"✓ Figures saved in '{args.output_dir}/' directory")
     else:
         print("⚠ Some validations failed. Check logs above.")
     print("="*60)
     
     # List all generated files
     print("\nGenerated files:")
-    for filename in sorted(os.listdir('results')):
-        size = os.path.getsize(f'results/{filename}') / 1024
+    for filename in sorted(os.listdir(args.output_dir)):
+        size = os.path.getsize(f'{args.output_dir}/{filename}') / 1024
         print(f"  - {filename} ({size:.1f} KB)")
     
     return all_passed
 
 if __name__ == "__main__":
+    # Parse command line arguments
+    args = parse_arguments()
+    
+    # Set random seed for reproducibility
+    np.random.seed(args.seed)
+    
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Setup IEEE style
+    colors, line_styles, markers = setup_ieee_style()
+    
+    # Log configuration
+    config = {
+        'timestamp': datetime.now().isoformat(),
+        'seed': args.seed,
+        'hardware_profile': args.hardware_profile,
+        'output_dir': args.output_dir,
+        'high_phase_noise': args.high_phase_noise,
+        'high_processing_gain': args.high_processing_gain
+    }
+    
+    with open(f'{args.output_dir}/config.json', 'w') as f:
+        json.dump(config, f, indent=2)
+    
+    print("\nConfiguration:")
+    for key, value in config.items():
+        print(f"  {key}: {value}")
+    
+    # Run main validation suite
     success = main()
     exit(0 if success else 1)

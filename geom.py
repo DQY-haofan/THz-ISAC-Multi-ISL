@@ -4,8 +4,7 @@ Geometry and Orbital Module for THz LEO-ISL ISAC Network Simulation
 
 This module provides the fundamental geometric and orbital mechanics functionality
 for simulating a LEO satellite constellation with inter-satellite links (ISLs).
-It handles satellite state propagation, geometric calculations, and dynamic
-network topology generation.
+All calculations use SI units (meters, seconds, radians).
 
 Author: THz ISAC Research Team
 Date: August 2025
@@ -16,17 +15,16 @@ from typing import List, Tuple, Dict, Optional, Set
 from dataclasses import dataclass, field
 import warnings
 
-# Physical constants (SI units)
-EARTH_RADIUS_M = 6371000.0  # Earth radius in meters (not km!)
-EARTH_MU_SI = 3.986004418e14  # Earth gravitational parameter (m³/s²) (not km³/s²!)
-SPEED_OF_LIGHT_M_S = 299792458.0  # Speed of light (m/s)
-
+# Physical constants (SI units - meters, seconds, radians)
+EARTH_RADIUS = 6371000.0  # Earth radius in meters
+EARTH_MU = 3.986004418e14  # Earth gravitational parameter (m³/s²)
+SPEED_OF_LIGHT = 299792458.0  # Speed of light (m/s)
 
 
 @dataclass
 class OrbitalElements:
     """Keplerian orbital elements for satellite orbit description."""
-    a: float  # Semi-major axis (km)
+    a: float  # Semi-major axis (m)
     e: float  # Eccentricity
     i: float  # Inclination (rad)
     raan: float  # Right ascension of ascending node (rad)
@@ -49,13 +47,13 @@ class StateVector:
     Satellite state vector containing kinematic and temporal parameters.
     
     Based on the system model from Section 2.1, each satellite state includes:
-    - 3D position vector (km)
-    - 3D velocity vector (km/s)
+    - 3D position vector (m)
+    - 3D velocity vector (m/s)
     - Clock bias (s)
     - Clock drift (s/s)
     """
-    position: np.ndarray  # [x, y, z] in km
-    velocity: np.ndarray  # [vx, vy, vz] in km/s
+    position: np.ndarray  # [x, y, z] in meters
+    velocity: np.ndarray  # [vx, vy, vz] in m/s
     clock_bias: float = 0.0  # Clock bias in seconds
     clock_drift: float = 0.0  # Clock drift in s/s
     timestamp: float = 0.0  # Time of state vector (s)
@@ -96,9 +94,7 @@ class StateVector:
 class Satellite:
     """
     Represents a single satellite with orbital dynamics and state propagation.
-    
-    This class handles individual satellite state management and propagation
-    using either simple Keplerian dynamics or more sophisticated models.
+    All internal calculations use SI units.
     """
     
     def __init__(self, 
@@ -136,10 +132,7 @@ class Satellite:
         )
     
     def _elements_to_state(self, elements: OrbitalElements) -> StateVector:
-        """Convert orbital elements to state vector."""
-        # Simplified conversion (classical orbital mechanics)
-        mu = EARTH_MU
-        
+        """Convert orbital elements to state vector (SI units)."""
         # Position in perifocal coordinates
         r_mag = elements.a * (1 - elements.e**2) / (1 + elements.e * np.cos(elements.nu))
         r_pqw = r_mag * np.array([
@@ -149,8 +142,8 @@ class Satellite:
         ])
         
         # Velocity in perifocal coordinates
-        h = np.sqrt(mu * elements.a * (1 - elements.e**2))
-        v_pqw = (mu / h) * np.array([
+        h = np.sqrt(EARTH_MU * elements.a * (1 - elements.e**2))
+        v_pqw = (EARTH_MU / h) * np.array([
             -np.sin(elements.nu),
             elements.e + np.cos(elements.nu),
             0
@@ -199,9 +192,7 @@ class Satellite:
     def _propagate_linear(self, t: float) -> StateVector:
         """
         Linear state propagation using state transition matrix.
-        
-        Based on Section 2.1 of the system model, implements:
-        x_k = F_k * x_{k-1} + w_{k-1}
+        All calculations in SI units.
         """
         dt = t - self.current_state.timestamp
         
@@ -223,12 +214,12 @@ class Satellite:
     def _propagate_keplerian(self, t: float) -> StateVector:
         """
         Keplerian two-body orbital propagation.
-        
         Uses analytical solution for unperturbed two-body motion.
+        All calculations in SI units.
         """
         dt = t - self.initial_state.timestamp
         
-        # Current position and velocity
+        # Current position and velocity (m and m/s)
         r0 = self.initial_state.position
         v0 = self.initial_state.velocity
         
@@ -237,11 +228,10 @@ class Satellite:
         v0_mag = np.linalg.norm(v0)
         
         # Orbital period and mean motion
-        a = 1 / (2/r0_mag - v0_mag**2/EARTH_MU)  # Semi-major axis
-        n = np.sqrt(EARTH_MU / a**3)  # Mean motion
+        a = 1 / (2/r0_mag - v0_mag**2/EARTH_MU)  # Semi-major axis (m)
+        n = np.sqrt(EARTH_MU / a**3)  # Mean motion (rad/s)
         
         # Simple circular orbit approximation for quick implementation
-        # (Full Kepler solver would be more complex)
         if a > 0:  # Elliptical orbit
             # Rotate position and velocity vectors
             theta = n * dt
@@ -249,7 +239,6 @@ class Satellite:
             sin_theta = np.sin(theta)
             
             # Simplified 2D rotation in orbital plane
-            # (Full 3D would require finding orbital plane first)
             r_new = r0 * cos_theta + (v0 / n) * sin_theta
             v_new = -r0 * n * sin_theta + v0 * cos_theta
         else:
@@ -274,9 +263,7 @@ class Satellite:
 class Constellation:
     """
     Manages a collection of satellites forming a constellation.
-    
-    This class handles constellation-level operations including coordinated
-    propagation and network topology management.
+    All calculations use SI units.
     """
     
     def __init__(self, satellites: Optional[List[Satellite]] = None):
@@ -349,12 +336,12 @@ def calculate_geometry(satellite_i: Satellite,
     
     Returns:
         Dictionary containing:
-        - 'distance': Euclidean distance (meters, not km!)
+        - 'distance': Euclidean distance (meters)
         - 'unit_vector': Unit line-of-sight vector from i to j
         - 'relative_position': Position vector from i to j (meters)
         - 'relative_velocity': Velocity vector from i to j (m/s)
     """
-    # Extract state vectors (already in meters from StateVector)
+    # Extract state vectors (in meters from StateVector)
     p_i = satellite_i.current_state.position  # meters
     p_j = satellite_j.current_state.position  # meters
     v_i = satellite_i.current_state.velocity  # m/s
@@ -381,59 +368,9 @@ def calculate_geometry(satellite_i: Satellite,
     }
 
 
-# 替换 geom.py 文件开头的常数定义
-# Physical constants (SI units)
-EARTH_RADIUS_M = 6371000.0  # Earth radius in meters (not km!)
-EARTH_MU_SI = 3.986004418e14  # Earth gravitational parameter (m³/s²) (not km³/s²!)
-SPEED_OF_LIGHT_M_S = 299792458.0  # Speed of light (m/s)
-
-# 替换 calculate_geometry 函数
-def calculate_geometry(satellite_i: Satellite, 
-                      satellite_j: Satellite) -> Dict[str, np.ndarray]:
-    """
-    Calculate geometric relationships between two satellites.
-    
-    Args:
-        satellite_i: First satellite
-        satellite_j: Second satellite
-    
-    Returns:
-        Dictionary containing:
-        - 'distance': Euclidean distance (meters, not km!)
-        - 'unit_vector': Unit line-of-sight vector from i to j
-        - 'relative_position': Position vector from i to j (meters)
-        - 'relative_velocity': Velocity vector from i to j (m/s)
-    """
-    # Extract state vectors (already in meters from StateVector)
-    p_i = satellite_i.current_state.position  # meters
-    p_j = satellite_j.current_state.position  # meters
-    v_i = satellite_i.current_state.velocity  # m/s
-    v_j = satellite_j.current_state.velocity  # m/s
-    
-    # Relative kinematics
-    relative_position = p_j - p_i  # meters
-    relative_velocity = v_j - v_i  # m/s
-    
-    # Distance and unit vector
-    distance = np.linalg.norm(relative_position)  # meters
-    
-    if distance > 0:
-        unit_vector = relative_position / distance
-    else:
-        unit_vector = np.zeros(3)
-        warnings.warn("Satellites at same position, unit vector undefined")
-    
-    return {
-        'distance': distance,  # meters
-        'unit_vector': unit_vector,
-        'relative_position': relative_position,  # meters
-        'relative_velocity': relative_velocity  # m/s
-    }
-
-# 替换 check_earth_obstruction 函数
 def check_earth_obstruction(sat_i_pos: np.ndarray, 
                            sat_j_pos: np.ndarray,
-                           earth_radius: float = EARTH_RADIUS_M) -> bool:
+                           earth_radius: float = EARTH_RADIUS) -> bool:
     """
     Check if Earth obstructs the line-of-sight between two satellites.
     
@@ -458,10 +395,10 @@ def check_earth_obstruction(sat_i_pos: np.ndarray,
     # Add margin for atmosphere (100 km = 100000 m)
     return distance_to_earth > (earth_radius + 100000)  # 100 km atmosphere in meters
 
-# 替换 get_visibility_graph 函数
+
 def get_visibility_graph(constellation: Constellation,
                         t: float,
-                        max_range_m: float = 5000000.0,  # 5000 km in meters
+                        max_range: float = 5000000.0,  # 5000 km in meters
                         check_obstruction: bool = True) -> Set[Tuple[str, str]]:
     """
     Generate the network topology (active ISLs) at time t.
@@ -469,7 +406,7 @@ def get_visibility_graph(constellation: Constellation,
     Args:
         constellation: Constellation object
         t: Time instant (seconds)
-        max_range_m: Maximum communication range (meters, not km!)
+        max_range: Maximum communication range (meters, default 5000 km)
         check_obstruction: Whether to check for Earth obstruction
     
     Returns:
@@ -492,7 +429,7 @@ def get_visibility_graph(constellation: Constellation,
             distance = geometry['distance']  # meters
             
             # Check range constraint
-            if distance > max_range_m:
+            if distance > max_range:
                 continue
             
             # Check Earth obstruction
@@ -551,9 +488,9 @@ def test_state_vector():
     """Test StateVector class functionality."""
     print("Testing StateVector...")
     
-    # Test initialization
-    pos = np.array([7000.0, 0.0, 0.0])
-    vel = np.array([0.0, 7.5, 0.0])
+    # Test initialization (now in meters)
+    pos = np.array([7000000.0, 0.0, 0.0])  # 7000 km in meters
+    vel = np.array([0.0, 7500.0, 0.0])  # 7.5 km/s in m/s
     state = StateVector(position=pos, velocity=vel, clock_bias=1e-6)
     
     assert state.position.shape == (3,), "Position shape incorrect"
@@ -574,10 +511,10 @@ def test_satellite_propagation():
     """Test satellite propagation."""
     print("Testing Satellite propagation...")
     
-    # Create satellite in circular orbit
+    # Create satellite in circular orbit (LEO at 700 km altitude)
     initial_state = StateVector(
-        position=np.array([7000.0, 0.0, 0.0]),  # 7000 km altitude
-        velocity=np.array([0.0, 7.546, 0.0])    # Circular orbit velocity
+        position=np.array([7071000.0, 0.0, 0.0]),  # Earth radius + 700 km altitude in meters
+        velocity=np.array([0.0, 7546.0, 0.0])       # Circular orbit velocity in m/s
     )
     
     sat = Satellite("SAT1", initial_state=initial_state, propagation_model="linear")
@@ -589,8 +526,8 @@ def test_satellite_propagation():
     assert not np.array_equal(new_state.position, initial_state.position), \
         "Satellite didn't move"
     
-    print(f"  Initial position: {initial_state.position}")
-    print(f"  Final position: {new_state.position}")
+    print(f"  Initial position: {initial_state.position/1000} km")
+    print(f"  Final position: {new_state.position/1000} km")
     print("✓ Satellite propagation tests passed")
 
 
@@ -598,14 +535,14 @@ def test_geometry_calculation():
     """Test geometric calculations between satellites."""
     print("Testing geometry calculations...")
     
-    # Create two satellites
+    # Create two satellites (positions in meters)
     state1 = StateVector(
-        position=np.array([7000.0, 0.0, 0.0]),
-        velocity=np.array([0.0, 7.5, 0.0])
+        position=np.array([7000000.0, 0.0, 0.0]),
+        velocity=np.array([0.0, 7500.0, 0.0])
     )
     state2 = StateVector(
-        position=np.array([0.0, 7000.0, 0.0]),
-        velocity=np.array([-7.5, 0.0, 0.0])
+        position=np.array([0.0, 7000000.0, 0.0]),
+        velocity=np.array([-7500.0, 0.0, 0.0])
     )
     
     sat1 = Satellite("SAT1", initial_state=state1)
@@ -614,12 +551,12 @@ def test_geometry_calculation():
     # Calculate geometry
     geom = calculate_geometry(sat1, sat2)
     
-    # Expected distance: sqrt(2) * 7000
-    expected_distance = np.sqrt(2) * 7000
-    assert abs(geom['distance'] - expected_distance) < 0.01, \
+    # Expected distance: sqrt(2) * 7000000
+    expected_distance = np.sqrt(2) * 7000000
+    assert abs(geom['distance'] - expected_distance) < 10, \
         f"Distance calculation error: {geom['distance']} vs {expected_distance}"
     
-    print(f"  Distance: {geom['distance']:.2f} km")
+    print(f"  Distance: {geom['distance']/1000:.2f} km")
     print(f"  Unit vector: {geom['unit_vector']}")
     print("✓ Geometry calculation tests passed")
 
@@ -628,19 +565,19 @@ def test_visibility_graph():
     """Test network topology generation."""
     print("Testing visibility graph generation...")
     
-    # Create a simple 3-satellite constellation
+    # Create a simple 3-satellite constellation (positions in meters)
     sats = []
     for i, angle in enumerate([0, 120, 240]):
         angle_rad = np.deg2rad(angle)
-        pos = 7000 * np.array([np.cos(angle_rad), np.sin(angle_rad), 0])
-        vel = 7.5 * np.array([-np.sin(angle_rad), np.cos(angle_rad), 0])
+        pos = 7000000 * np.array([np.cos(angle_rad), np.sin(angle_rad), 0])
+        vel = 7500 * np.array([-np.sin(angle_rad), np.cos(angle_rad), 0])
         state = StateVector(position=pos, velocity=vel)
         sats.append(Satellite(f"SAT{i+1}", initial_state=state))
     
     constellation = Constellation(sats)
     
     # Get visibility graph
-    links = get_visibility_graph(constellation, t=0.0, max_range_km=15000.0)
+    links = get_visibility_graph(constellation, t=0.0, max_range=15000000.0)
     
     print(f"  Active links: {links}")
     print(f"  Number of links: {len(links)}")
@@ -655,15 +592,15 @@ def test_earth_obstruction():
     """Test Earth obstruction checking."""
     print("Testing Earth obstruction...")
     
-    # Case 1: Clear line of sight (both satellites high above Earth)
-    sat1_pos = np.array([8000.0, 0.0, 0.0])
-    sat2_pos = np.array([0.0, 8000.0, 0.0])
+    # Case 1: Clear line of sight (both satellites high above Earth, in meters)
+    sat1_pos = np.array([8000000.0, 0.0, 0.0])
+    sat2_pos = np.array([0.0, 8000000.0, 0.0])
     assert check_earth_obstruction(sat1_pos, sat2_pos), \
         "False obstruction detected for clear LOS"
     
     # Case 2: Obstructed (line passes through Earth)
-    sat1_pos = np.array([7000.0, 0.0, 0.0])
-    sat2_pos = np.array([-7000.0, 0.0, 0.0])
+    sat1_pos = np.array([7000000.0, 0.0, 0.0])
+    sat2_pos = np.array([-7000000.0, 0.0, 0.0])
     assert not check_earth_obstruction(sat1_pos, sat2_pos), \
         "Failed to detect obstruction"
     
@@ -673,7 +610,7 @@ def test_earth_obstruction():
 if __name__ == "__main__":
     """Run all unit tests."""
     print("=" * 60)
-    print("Running Geometry Module Unit Tests")
+    print("Running Geometry Module Unit Tests (SI Units)")
     print("=" * 60)
     
     test_state_vector()

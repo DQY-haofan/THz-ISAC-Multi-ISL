@@ -3,14 +3,7 @@ Unified Performance Model Module for THz LEO-ISL ISAC Network Simulation
 =========================================================================
 
 This module serves as the central hub connecting all physical models to final
-performance metrics. It implements the unified SINR and measurement variance
-formulas that consistently appear throughout the theoretical framework.
-
-Based on:
-- Section III equations (17)-(18) for measurement variance and effective SINR
-- Noise-normalized unified approach (Plan B from expert review)
-- Hardware impairment model from Section 2.3
-- Network interference framework from Section 4.2
+performance metrics. All distance calculations use SI units (meters).
 
 Author: THz ISAC Research Team
 Date: August 2025
@@ -33,14 +26,14 @@ class PerformanceMetrics:
     Attributes:
         sinr_eff: Effective SINR (linear scale)
         sinr_eff_db: Effective SINR in dB
-        measurement_variance: TOA measurement error variance (s²)
+        range_variance_m2: Range measurement error variance (m²)
         ranging_rmse: Ranging RMSE (meters)
         hardware_penalty_db: Performance loss due to hardware (dB)
         interference_penalty_db: Performance loss due to interference (dB)
     """
     sinr_eff: float
     sinr_eff_db: float
-    measurement_variance: float
+    range_variance_m2: float
     ranging_rmse: float
     hardware_penalty_db: float
     interference_penalty_db: float
@@ -59,31 +52,17 @@ def calculate_effective_sinr(snr0: float,
     Implements the unified noise-normalized formula from Section III eq. (18):
     SINR_eff,ℓ = (SNR_0,ℓ · exp(-σ²_φ,ℓ)) / (1 + SNR_0,ℓ · Γ_eff,ℓ + Σ α̃_ℓm)
     
-    This is the "Plan B" approach from expert review where all terms in the
-    denominator are normalized by noise power, making them dimensionless.
-    
     Args:
         snr0: Pre-impairment SNR (linear scale, not dB)
         gamma_eff: Effective hardware quality factor (default 0 = ideal)
         sigma_phi_squared: Phase noise variance in rad² (default 0 = no phase noise)
         normalized_interference: Normalized interference coefficients α̃_ℓm
-                                Can be scalar, list, or numpy array
         hardware_on: Enable hardware impairments (default True)
         interference_on: Enable interference effects (default True)
         phase_noise_on: Enable phase noise effects (default True)
     
     Returns:
         Effective SINR (linear scale, not dB)
-    
-    Example:
-        >>> # 20 dB SNR with moderate hardware and interference
-        >>> snr0 = 100
-        >>> gamma_eff = 0.01  # High-performance hardware
-        >>> sigma_phi_sq = 1e-4  # Phase noise
-        >>> interference = [0.5, 0.3, 0.1]  # Three interferers
-        >>> sinr_eff = calculate_effective_sinr(
-        ...     snr0, gamma_eff, sigma_phi_sq, interference
-        ... )
     """
     # Input validation
     if snr0 < 0:
@@ -124,14 +103,14 @@ def calculate_effective_sinr(snr0: float,
 
 
 def calculate_range_variance(sinr_eff: float,
-                                sigma_phi_squared: float,
-                                f_c: float,
-                                kappa_wf: Optional[float] = None,
-                                bandwidth: Optional[float] = None) -> float:
+                            sigma_phi_squared: float,
+                            f_c: float,
+                            kappa_wf: Optional[float] = None,
+                            bandwidth: Optional[float] = None) -> float:
     """
     Calculate range measurement error variance in meters squared.
     
-    This function computes the variance of range measurements (not time!).
+    This function computes the variance of range measurements.
     The output is in m², suitable for direct use in RMSE calculations.
     
     Args:
@@ -176,20 +155,20 @@ def calculate_range_variance(sinr_eff: float,
     return sigma_squared_range
 
 
-def calculate_ranging_rmse(measurement_variance: float) -> float:
+def calculate_ranging_rmse(range_variance_m2: float) -> float:
     """
-    Convert TOA measurement variance to ranging RMSE.
+    Convert range measurement variance to ranging RMSE.
     
     Args:
-        measurement_variance: TOA measurement error variance (s²)
+        range_variance_m2: Range measurement error variance (m²)
     
     Returns:
         Ranging RMSE in meters
     """
-    if measurement_variance < 0:
-        raise ValueError("Measurement variance must be non-negative")
+    if range_variance_m2 < 0:
+        raise ValueError("Range variance must be non-negative")
     
-    # RMSE = c * sqrt(σ²_τ) where σ²_τ is timing variance
+    # RMSE = sqrt(σ²_range) where σ²_range is range variance in m²
     ranging_rmse = np.sqrt(range_variance_m2)
     
     return ranging_rmse
@@ -204,9 +183,6 @@ def analyze_performance_breakdown(snr0: float,
     """
     Comprehensive performance analysis with breakdown by impairment source.
     
-    This function calculates all performance metrics and identifies the
-    dominant impairment sources, useful for system optimization.
-    
     Args:
         snr0: Pre-impairment SNR (linear scale)
         gamma_eff: Hardware quality factor
@@ -217,14 +193,6 @@ def analyze_performance_breakdown(snr0: float,
     
     Returns:
         PerformanceMetrics object with comprehensive analysis
-    
-    Example:
-        >>> metrics = analyze_performance_breakdown(
-        ...     snr0=100, gamma_eff=0.01, sigma_phi_squared=1e-4,
-        ...     normalized_interference=[0.5, 0.3], f_c=300e9, bandwidth=10e9
-        ... )
-        >>> print(f"Effective SINR: {metrics.sinr_eff_db:.1f} dB")
-        >>> print(f"Ranging RMSE: {metrics.ranging_rmse*1e3:.2f} mm")
     """
     # Calculate SINR with all impairments
     sinr_full = calculate_effective_sinr(
@@ -244,11 +212,11 @@ def analyze_performance_breakdown(snr0: float,
         hardware_on=True, interference_on=False, phase_noise_on=True
     )
     
-    # Calculate measurement variance and ranging RMSE
-    meas_var = calculate_measurement_variance(
+    # Calculate range variance and ranging RMSE
+    range_var = calculate_range_variance(
         sinr_full, sigma_phi_squared, f_c, bandwidth=bandwidth
     )
-    ranging_rmse = calculate_ranging_rmse(meas_var)
+    ranging_rmse = calculate_ranging_rmse(range_var)
     
     # Calculate penalties in dB
     hardware_penalty = 10 * np.log10(sinr_no_hw / sinr_full) if sinr_full > 0 else np.inf
@@ -257,7 +225,7 @@ def analyze_performance_breakdown(snr0: float,
     return PerformanceMetrics(
         sinr_eff=sinr_full,
         sinr_eff_db=10 * np.log10(sinr_full) if sinr_full > 0 else -np.inf,
-        measurement_variance=meas_var,
+        range_variance_m2=range_var,
         ranging_rmse=ranging_rmse,
         hardware_penalty_db=hardware_penalty,
         interference_penalty_db=interference_penalty
@@ -269,9 +237,6 @@ def identify_limiting_regime(snr0: float,
                             normalized_interference_sum: float) -> str:
     """
     Identify the dominant performance-limiting factor.
-    
-    Analyzes the denominator terms in the SINR formula to determine
-    which factor is the primary bottleneck.
     
     Args:
         snr0: Pre-impairment SNR (linear scale)
@@ -396,20 +361,10 @@ def test_effective_sinr():
     
     print("✓ Effective SINR tests passed")
 
-def calculate_measurement_variance(*args, **kwargs):
-    """
-    DEPRECATED: Use calculate_range_variance_m2 instead.
-    This function name was ambiguous about units.
-    """
-    warnings.warn("calculate_measurement_variance is deprecated. "
-                 "Use calculate_range_variance_m2 for clarity.", 
-                 DeprecationWarning)
-    return calculate_range_variance(*args, **kwargs)
 
-
-def test_measurement_variance():
-    """Test measurement variance calculation."""
-    print("Testing measurement variance calculation...")
+def test_range_variance():
+    """Test range variance calculation."""
+    print("Testing range variance calculation...")
     
     # Test parameters
     sinr_eff = 50  # ~17 dB
@@ -418,18 +373,18 @@ def test_measurement_variance():
     bandwidth = 10e9  # 10 GHz
     
     # Calculate variance
-    var = calculate_measurement_variance(
+    var = calculate_range_variance(
         sinr_eff, sigma_phi_sq, f_c, bandwidth=bandwidth
     )
     
     # Convert to ranging RMSE
     rmse = calculate_ranging_rmse(var)
     
-    print(f"  Measurement variance: {var:.3e} s²")
+    print(f"  Range variance: {var:.3e} m²")
     print(f"  Ranging RMSE: {rmse*1e3:.3f} mm")
     
     # Test error floor
-    var_high_sinr = calculate_measurement_variance(
+    var_high_sinr = calculate_range_variance(
         1e6, sigma_phi_sq, f_c, bandwidth=bandwidth
     )
     rmse_floor = calculate_ranging_rmse(var_high_sinr)
@@ -438,7 +393,7 @@ def test_measurement_variance():
     
     assert rmse > rmse_floor, "Should approach but not exceed floor"
     
-    print("✓ Measurement variance tests passed")
+    print("✓ Range variance tests passed")
 
 
 def test_performance_breakdown():
@@ -541,13 +496,13 @@ def test_unity_switches():
 
 
 if __name__ == "__main__":
-    """Run all unit tests and demonstrate usage."""
+    """Run all unit tests."""
     print("=" * 60)
-    print("Running Performance Model Unit Tests")
+    print("Running Performance Model Unit Tests (SI Units)")
     print("=" * 60)
     
     test_effective_sinr()
-    test_measurement_variance()
+    test_range_variance()
     test_performance_breakdown()
     test_limiting_regime()
     test_hardware_ceiling()
@@ -556,75 +511,3 @@ if __name__ == "__main__":
     print("=" * 60)
     print("All tests passed successfully! ✓")
     print("=" * 60)
-    
-    # Comprehensive example
-    print("\n" + "=" * 60)
-    print("Example: Complete Performance Analysis")
-    print("=" * 60)
-    
-    # System configuration
-    print("\nSystem Configuration:")
-    print("-" * 40)
-    snr0_db = 20
-    snr0 = 10**(snr0_db/10)
-    gamma_eff = 0.01  # High-performance hardware
-    sigma_phi_squared = 1e-4  # Moderate phase noise
-    f_c = 300e9  # 300 GHz
-    bandwidth = 10e9  # 10 GHz
-    
-    print(f"Pre-impairment SNR: {snr0_db} dB")
-    print(f"Hardware quality factor: {gamma_eff}")
-    print(f"Phase noise variance: {sigma_phi_squared} rad²")
-    print(f"Carrier frequency: {f_c/1e9:.0f} GHz")
-    print(f"Bandwidth: {bandwidth/1e9:.0f} GHz")
-    
-    # Interference scenario
-    print("\nInterference Scenario:")
-    print("-" * 40)
-    # Three interferers with different strengths
-    alpha_values = [0.01, 0.005, 0.002]  # Interference coefficients
-    normalized_interference = [snr0 * alpha for alpha in alpha_values]
-    
-    for i, (alpha, alpha_tilde) in enumerate(zip(alpha_values, normalized_interference)):
-        print(f"Interferer {i+1}: α = {10*np.log10(alpha):.1f} dB, "
-              f"α̃ = {alpha_tilde:.3f}")
-    
-    # Performance analysis
-    print("\nPerformance Analysis:")
-    print("-" * 40)
-    
-    metrics = analyze_performance_breakdown(
-        snr0, gamma_eff, sigma_phi_squared,
-        normalized_interference, f_c, bandwidth
-    )
-    
-    print(f"Effective SINR: {metrics.sinr_eff_db:.2f} dB")
-    print(f"Capacity: {calculate_capacity_upper_bound(metrics.sinr_eff):.2f} bits/symbol")
-    print(f"Ranging RMSE: {metrics.ranging_rmse*1e3:.2f} mm")
-    print(f"Hardware penalty: {metrics.hardware_penalty_db:.2f} dB")
-    print(f"Interference penalty: {metrics.interference_penalty_db:.2f} dB")
-    
-    # Limiting regime
-    regime = identify_limiting_regime(snr0, gamma_eff, sum(normalized_interference))
-    print(f"Limiting regime: {regime}")
-    
-    # Hardware ceiling
-    print("\nHardware-Imposed Ceilings:")
-    print("-" * 40)
-    ceiling = calculate_hardware_ceiling(gamma_eff, sigma_phi_squared)
-    print(f"SINR ceiling: {ceiling['sinr_ceiling_db']:.1f} dB")
-    print(f"Capacity ceiling: {ceiling['capacity_ceiling']:.2f} bits/symbol")
-    
-    # Comparison with ideal case
-    print("\nComparison with Ideal System:")
-    print("-" * 40)
-    sinr_ideal = calculate_effective_sinr(
-        snr0, 0, 0, 0,
-        hardware_on=False, interference_on=False, phase_noise_on=False
-    )
-    capacity_ideal = calculate_capacity_upper_bound(sinr_ideal)
-    
-    print(f"Ideal SINR: {10*np.log10(sinr_ideal):.2f} dB")
-    print(f"Ideal capacity: {capacity_ideal:.2f} bits/symbol")
-    print(f"Total degradation: {10*np.log10(sinr_ideal/metrics.sinr_eff):.2f} dB")
-    print(f"Capacity loss: {capacity_ideal - calculate_capacity_upper_bound(metrics.sinr_eff):.2f} bits/symbol")

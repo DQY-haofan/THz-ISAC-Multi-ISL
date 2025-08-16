@@ -65,30 +65,19 @@ class InformationFilter:
         self.clock_indices = np.array(self.clock_indices)
 
 
-# 替换 build_jacobian 函数
 def build_jacobian(sat_i_idx: int, sat_j_idx: int,
                   sat_states: np.ndarray,
                   n_states_per_sat: int = 8) -> np.ndarray:
     """
     Build sparse Jacobian row vector H_ℓ for TOA measurement between two satellites.
+    Generic implementation supporting arbitrary network topology.
     
-    Args:
-        sat_i_idx: Index of transmitting satellite (0 to N_v-1)
-        sat_j_idx: Index of receiving satellite (0 to N_v-1)
-        sat_states: Complete network state vector (8*N_v x 1)
-        n_states_per_sat: Number of states per satellite (default 8)
-    
-    Returns:
-        Sparse Jacobian row vector (1 x n_states_total)
-    
-    Example:
-        >>> sat_states = np.random.randn(32)  # 4 satellites
-        >>> H = build_jacobian(0, 2, sat_states)  # Link from sat 0 to sat 2
+    改动: 接受卫星索引而不是硬编码的状态向量
     """
     n_states_total = len(sat_states)
     n_satellites = n_states_total // n_states_per_sat
     
-    # Validate indices
+    # 验证索引
     if sat_i_idx < 0 or sat_i_idx >= n_satellites:
         raise ValueError(f"Invalid transmitter index: {sat_i_idx}")
     if sat_j_idx < 0 or sat_j_idx >= n_satellites:
@@ -96,7 +85,7 @@ def build_jacobian(sat_i_idx: int, sat_j_idx: int,
     if sat_i_idx == sat_j_idx:
         raise ValueError("Transmitter and receiver must be different")
     
-    # Extract satellite states
+    # 动态计算索引位置
     i_start = sat_i_idx * n_states_per_sat
     j_start = sat_j_idx * n_states_per_sat
     
@@ -210,13 +199,17 @@ def predict_info(J_prev: np.ndarray, y_prev: np.ndarray,
     return J_prior, y_prior
 
 
+# 改动2: update_info 函数中的单位转换
 def update_info(J_prior: np.ndarray, y_prior: np.ndarray,
                active_links: List[Tuple[int, int]],
                sat_states: np.ndarray,
-               R_list: List[float],
+               range_variance_list: List[float],  # 改动: 明确是 range variance in m²
                z_list: List[float],
                correlated_noise: bool = False,
                correlation_matrix: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    CRITICAL: 输入是 range variances (m²)，内部转换为 TOA variances (s²)
+    """
     """
     Information filter measurement update (correction) step.
     
@@ -243,9 +236,14 @@ def update_info(J_prior: np.ndarray, y_prior: np.ndarray,
     
     # Build Jacobian for each active link
     H_list = []
-    for sat_i_idx, sat_j_idx in active_links:
-        H = build_jacobian(sat_i_idx, sat_j_idx, sat_states)
-        H_list.append(H)
+    for (sat_i_idx, sat_j_idx), range_var_m2 in zip(active_links, range_variance_list):
+            # Build Jacobian using generic function
+            H = build_jacobian(sat_i_idx, sat_j_idx, sat_states)
+            H_list.append(H)
+            
+            # 关键改动: 单位转换 m² -> s²
+            toa_variance_s2 = range_var_m2 / (SPEED_OF_LIGHT**2)
+            R_list.append(toa_variance_s2)
     
     if correlated_noise and correlation_matrix is not None:
         # Stack all Jacobians

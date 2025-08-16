@@ -50,27 +50,22 @@ class BistaticGeometry:
 @dataclass
 class BistaticRadarParameters:
     """
-    Parameters for bistatic radar link budget calculation.
-    
-    Attributes:
-        tx_power: Transmit power (W)
-        tx_gain: Transmit antenna gain toward target (linear)
-        rx_gain: Receive antenna gain from target direction (linear)
-        wavelength: Carrier wavelength (m)
-        bistatic_rcs: Bistatic radar cross-section (m²)
-        processing_loss: Processing losses (linear, ≥1)
-        noise_power: Effective noise power including residual interference (W)
+    增加了 processing_gain 属性
     """
     tx_power: float
     tx_gain: float
     rx_gain: float
     wavelength: float
     bistatic_rcs: float
+    processing_gain: float = 1e6  # 新增: 默认 60 dB 处理增益
     processing_loss: float = 1.0
-    noise_power: float = 1e-20  # Default thermal noise
+    noise_power: float = 1e-20
+
     
     def __post_init__(self):
         """Validate radar parameters."""
+        if self.processing_gain < 1:
+            raise ValueError("Processing gain must be ≥ 1")
         if self.tx_power <= 0:
             raise ValueError("Transmit power must be positive")
         if self.tx_gain <= 0 or self.rx_gain <= 0:
@@ -166,28 +161,7 @@ def calculate_bistatic_geometry(tx_position: np.ndarray,
 def calculate_sinr_ioo(radar_params: BistaticRadarParameters,
                       geometry: BistaticGeometry) -> float:
     """
-    Calculate effective SINR for opportunistic bistatic radar link.
-    
-    Implements equation (29) from Section 4.3.3:
-    SINR_IoO = (P_t G_{T,m}(θ_{m,t}) G_{R,ℓ}(θ_{ℓ,t}) σ_b λ²) / 
-               ((4π)³ R²_{m,t} R²_{ℓ,t} L_proc N_eff)
-    
-    This is the bistatic radar equation for the echo signal after
-    direct-path interference cancellation.
-    
-    Args:
-        radar_params: Bistatic radar link parameters
-        geometry: Bistatic geometry from calculate_bistatic_geometry()
-    
-    Returns:
-        Effective SINR for the opportunistic echo signal (linear scale)
-    
-    Example:
-        >>> params = BistaticRadarParameters(
-        ...     tx_power=1.0, tx_gain=1000, rx_gain=1000,
-        ...     wavelength=1e-3, bistatic_rcs=10.0
-        ... )
-        >>> sinr = calculate_sinr_ioo(params, geometry)
+    Enhanced with processing gain for physical realism.
     """
     # Extract parameters
     P_t = radar_params.tx_power
@@ -195,14 +169,15 @@ def calculate_sinr_ioo(radar_params: BistaticRadarParameters,
     G_r = radar_params.rx_gain
     λ = radar_params.wavelength
     σ_b = radar_params.bistatic_rcs
+    G_p = radar_params.processing_gain  # 新增: 提取处理增益
     L_proc = radar_params.processing_loss
     N_eff = radar_params.noise_power
     
     R_tx = geometry.transmitter_range
     R_rx = geometry.receiver_range
     
-    # Bistatic radar equation - equation (29)
-    numerator = P_t * G_t * G_r * σ_b * λ**2
+    # 改动: 分子增加处理增益
+    numerator = P_t * G_t * G_r * σ_b * λ**2 * G_p
     denominator = (4 * np.pi)**3 * R_tx**2 * R_rx**2 * L_proc * N_eff
     
     sinr_ioo = numerator / denominator
