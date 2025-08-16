@@ -16,10 +16,11 @@ from typing import List, Tuple, Dict, Optional, Set
 from dataclasses import dataclass, field
 import warnings
 
-# Physical constants
-EARTH_RADIUS_KM = 6371.0  # Earth radius in kilometers
-EARTH_MU = 398600.4418  # Earth gravitational parameter (km³/s²)
-SPEED_OF_LIGHT = 299792.458  # Speed of light (km/s)
+# Physical constants (SI units)
+EARTH_RADIUS_M = 6371000.0  # Earth radius in meters (not km!)
+EARTH_MU_SI = 3.986004418e14  # Earth gravitational parameter (m³/s²) (not km³/s²!)
+SPEED_OF_LIGHT_M_S = 299792458.0  # Speed of light (m/s)
+
 
 
 @dataclass
@@ -348,23 +349,23 @@ def calculate_geometry(satellite_i: Satellite,
     
     Returns:
         Dictionary containing:
-        - 'distance': Euclidean distance (km)
+        - 'distance': Euclidean distance (meters, not km!)
         - 'unit_vector': Unit line-of-sight vector from i to j
-        - 'relative_position': Position vector from i to j
-        - 'relative_velocity': Velocity vector from i to j
+        - 'relative_position': Position vector from i to j (meters)
+        - 'relative_velocity': Velocity vector from i to j (m/s)
     """
-    # Extract state vectors
-    p_i = satellite_i.current_state.position
-    p_j = satellite_j.current_state.position
-    v_i = satellite_i.current_state.velocity
-    v_j = satellite_j.current_state.velocity
+    # Extract state vectors (already in meters from StateVector)
+    p_i = satellite_i.current_state.position  # meters
+    p_j = satellite_j.current_state.position  # meters
+    v_i = satellite_i.current_state.velocity  # m/s
+    v_j = satellite_j.current_state.velocity  # m/s
     
     # Relative kinematics
-    relative_position = p_j - p_i
-    relative_velocity = v_j - v_i
+    relative_position = p_j - p_i  # meters
+    relative_velocity = v_j - v_i  # m/s
     
     # Distance and unit vector
-    distance = np.linalg.norm(relative_position)
+    distance = np.linalg.norm(relative_position)  # meters
     
     if distance > 0:
         unit_vector = relative_position / distance
@@ -373,23 +374,73 @@ def calculate_geometry(satellite_i: Satellite,
         warnings.warn("Satellites at same position, unit vector undefined")
     
     return {
-        'distance': distance,
+        'distance': distance,  # meters
         'unit_vector': unit_vector,
-        'relative_position': relative_position,
-        'relative_velocity': relative_velocity
+        'relative_position': relative_position,  # meters
+        'relative_velocity': relative_velocity  # m/s
     }
 
 
+# 替换 geom.py 文件开头的常数定义
+# Physical constants (SI units)
+EARTH_RADIUS_M = 6371000.0  # Earth radius in meters (not km!)
+EARTH_MU_SI = 3.986004418e14  # Earth gravitational parameter (m³/s²) (not km³/s²!)
+SPEED_OF_LIGHT_M_S = 299792458.0  # Speed of light (m/s)
+
+# 替换 calculate_geometry 函数
+def calculate_geometry(satellite_i: Satellite, 
+                      satellite_j: Satellite) -> Dict[str, np.ndarray]:
+    """
+    Calculate geometric relationships between two satellites.
+    
+    Args:
+        satellite_i: First satellite
+        satellite_j: Second satellite
+    
+    Returns:
+        Dictionary containing:
+        - 'distance': Euclidean distance (meters, not km!)
+        - 'unit_vector': Unit line-of-sight vector from i to j
+        - 'relative_position': Position vector from i to j (meters)
+        - 'relative_velocity': Velocity vector from i to j (m/s)
+    """
+    # Extract state vectors (already in meters from StateVector)
+    p_i = satellite_i.current_state.position  # meters
+    p_j = satellite_j.current_state.position  # meters
+    v_i = satellite_i.current_state.velocity  # m/s
+    v_j = satellite_j.current_state.velocity  # m/s
+    
+    # Relative kinematics
+    relative_position = p_j - p_i  # meters
+    relative_velocity = v_j - v_i  # m/s
+    
+    # Distance and unit vector
+    distance = np.linalg.norm(relative_position)  # meters
+    
+    if distance > 0:
+        unit_vector = relative_position / distance
+    else:
+        unit_vector = np.zeros(3)
+        warnings.warn("Satellites at same position, unit vector undefined")
+    
+    return {
+        'distance': distance,  # meters
+        'unit_vector': unit_vector,
+        'relative_position': relative_position,  # meters
+        'relative_velocity': relative_velocity  # m/s
+    }
+
+# 替换 check_earth_obstruction 函数
 def check_earth_obstruction(sat_i_pos: np.ndarray, 
                            sat_j_pos: np.ndarray,
-                           earth_radius: float = EARTH_RADIUS_KM) -> bool:
+                           earth_radius: float = EARTH_RADIUS_M) -> bool:
     """
     Check if Earth obstructs the line-of-sight between two satellites.
     
     Args:
-        sat_i_pos: Position of first satellite (km)
-        sat_j_pos: Position of second satellite (km)
-        earth_radius: Earth radius (km)
+        sat_i_pos: Position of first satellite (meters)
+        sat_j_pos: Position of second satellite (meters)
+        earth_radius: Earth radius (meters, default 6371000.0)
     
     Returns:
         True if line-of-sight is clear, False if obstructed
@@ -398,31 +449,27 @@ def check_earth_obstruction(sat_i_pos: np.ndarray,
     d = sat_j_pos - sat_i_pos
     
     # Closest point on line segment to Earth center
-    # Parametric equation: p(t) = sat_i_pos + t * d, t ∈ [0, 1]
     t = -np.dot(sat_i_pos, d) / np.dot(d, d)
-    t = np.clip(t, 0, 1)  # Constrain to line segment
+    t = np.clip(t, 0, 1)
     
     closest_point = sat_i_pos + t * d
     distance_to_earth = np.linalg.norm(closest_point)
     
-    # Add small margin for atmospheric effects
-    return distance_to_earth > (earth_radius + 100)  # 100 km atmosphere margin
+    # Add margin for atmosphere (100 km = 100000 m)
+    return distance_to_earth > (earth_radius + 100000)  # 100 km atmosphere in meters
 
-
+# 替换 get_visibility_graph 函数
 def get_visibility_graph(constellation: Constellation,
                         t: float,
-                        max_range_km: float = 5000.0,
+                        max_range_m: float = 5000000.0,  # 5000 km in meters
                         check_obstruction: bool = True) -> Set[Tuple[str, str]]:
     """
     Generate the network topology (active ISLs) at time t.
     
-    Based on Section 2.2, determines which inter-satellite links are active
-    based on visibility and communication range constraints.
-    
     Args:
         constellation: Constellation object
         t: Time instant (seconds)
-        max_range_km: Maximum communication range (km)
+        max_range_m: Maximum communication range (meters, not km!)
         check_obstruction: Whether to check for Earth obstruction
     
     Returns:
@@ -442,17 +489,17 @@ def get_visibility_graph(constellation: Constellation,
             
             # Calculate geometry
             geometry = calculate_geometry(sat_i, sat_j)
-            distance = geometry['distance']
+            distance = geometry['distance']  # meters
             
             # Check range constraint
-            if distance > max_range_km:
+            if distance > max_range_m:
                 continue
             
             # Check Earth obstruction
             if check_obstruction:
                 if not check_earth_obstruction(
-                    sat_i.current_state.position,
-                    sat_j.current_state.position
+                    sat_i.current_state.position,  # meters
+                    sat_j.current_state.position   # meters
                 ):
                     continue
             

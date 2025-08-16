@@ -123,40 +123,26 @@ def calculate_effective_sinr(snr0: float,
     return sinr_eff
 
 
-def calculate_measurement_variance(sinr_eff: float,
-                                  sigma_phi_squared: float,
-                                  f_c: float,
-                                  kappa_wf: Optional[float] = None,
-                                  bandwidth: Optional[float] = None) -> float:
+def calculate_range_variance(sinr_eff: float,
+                                sigma_phi_squared: float,
+                                f_c: float,
+                                kappa_wf: Optional[float] = None,
+                                bandwidth: Optional[float] = None) -> float:
     """
-    Calculate TOA measurement error variance.
+    Calculate range measurement error variance in meters squared.
     
-    Implements equation (17) from Section III:
-    σ²_meas,ℓ = c² [κ_WF/SINR_eff,ℓ + σ²_φ,ℓ/(2πf_c)²]
-    
-    This unified model captures both:
-    - Waveform-limited regime (first term dominates at low SINR)
-    - Phase-noise-limited regime (second term provides error floor)
+    This function computes the variance of range measurements (not time!).
+    The output is in m², suitable for direct use in RMSE calculations.
     
     Args:
         sinr_eff: Effective SINR (linear scale)
         sigma_phi_squared: Phase noise variance (rad²)
         f_c: Carrier frequency (Hz)
         kappa_wf: Waveform constant κ_WF = 1/(8π²β²)
-                 If None, calculated from bandwidth
         bandwidth: Signal bandwidth (Hz), used if kappa_wf not provided
     
     Returns:
-        TOA measurement error variance (s²)
-    
-    Example:
-        >>> sinr_eff = 50  # ~17 dB
-        >>> sigma_phi_sq = 1e-4
-        >>> f_c = 300e9  # 300 GHz
-        >>> bandwidth = 10e9  # 10 GHz
-        >>> var = calculate_measurement_variance(
-        ...     sinr_eff, sigma_phi_sq, f_c, bandwidth=bandwidth
-        ... )
+        Range measurement error variance (m²)
     """
     # Input validation
     if sinr_eff <= 0:
@@ -172,26 +158,22 @@ def calculate_measurement_variance(sinr_eff: float,
             raise ValueError("Either kappa_wf or bandwidth must be provided")
         if bandwidth <= 0:
             raise ValueError("Bandwidth must be positive")
-        # κ_WF = 1/(8π²β²) where β is RMS bandwidth
-        # For rectangular spectrum, β ≈ bandwidth/√12
         beta_rms = bandwidth / np.sqrt(12)
         kappa_wf = 1 / (8 * np.pi**2 * beta_rms**2)
     elif kappa_wf <= 0:
         raise ValueError("Waveform constant must be positive")
     
-    # Waveform-limited term (CRLB for TOA estimation)
+    # Calculate time variance components
     waveform_term = kappa_wf / sinr_eff
+    phase_noise_term = sigma_phi_squared / (2 * np.pi * f_c)**2 if sigma_phi_squared > 0 else 0.0
     
-    # Phase-noise-limited term (error floor)
-    if sigma_phi_squared > 0:
-        phase_noise_term = sigma_phi_squared / (2 * np.pi * f_c)**2
-    else:
-        phase_noise_term = 0.0
+    # Total time variance
+    sigma_squared_time = waveform_term + phase_noise_term
     
-    # Total measurement variance
-    sigma_squared_meas = SPEED_OF_LIGHT**2 * (waveform_term + phase_noise_term)
+    # Convert to range variance (multiply by c²)
+    sigma_squared_range = SPEED_OF_LIGHT**2 * sigma_squared_time
     
-    return sigma_squared_meas
+    return sigma_squared_range
 
 
 def calculate_ranging_rmse(measurement_variance: float) -> float:
@@ -208,8 +190,7 @@ def calculate_ranging_rmse(measurement_variance: float) -> float:
         raise ValueError("Measurement variance must be non-negative")
     
     # RMSE = c * sqrt(σ²_τ) where σ²_τ is timing variance
-    timing_std = np.sqrt(measurement_variance)
-    ranging_rmse = SPEED_OF_LIGHT * timing_std
+    ranging_rmse = np.sqrt(range_variance_m2)
     
     return ranging_rmse
 
@@ -414,6 +395,16 @@ def test_effective_sinr():
     assert sinr_full < sinr_no_pn, "Phase noise should reduce SINR"
     
     print("✓ Effective SINR tests passed")
+
+def calculate_measurement_variance(*args, **kwargs):
+    """
+    DEPRECATED: Use calculate_range_variance_m2 instead.
+    This function name was ambiguous about units.
+    """
+    warnings.warn("calculate_measurement_variance is deprecated. "
+                 "Use calculate_range_variance_m2 for clarity.", 
+                 DeprecationWarning)
+    return calculate_range_variance(*args, **kwargs)
 
 
 def test_measurement_variance():

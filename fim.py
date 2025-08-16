@@ -65,31 +65,45 @@ class InformationFilter:
         self.clock_indices = np.array(self.clock_indices)
 
 
-def build_jacobian(sat_i_state: np.ndarray, sat_j_state: np.ndarray,
-                  n_states_total: int) -> np.ndarray:
+# 替换 build_jacobian 函数
+def build_jacobian(sat_i_idx: int, sat_j_idx: int,
+                  sat_states: np.ndarray,
+                  n_states_per_sat: int = 8) -> np.ndarray:
     """
     Build sparse Jacobian row vector H_ℓ for TOA measurement between two satellites.
     
-    Based on Section 2.2, the Jacobian has non-zero elements only for the
-    two satellites involved in the link:
-    - Partial derivatives w.r.t positions: ±u_ij/c
-    - Partial derivatives w.r.t clock biases: ±1
-    - All other elements (velocities, clock drifts): 0
-    
     Args:
-        sat_i_state: State vector of transmitting satellite [p, v, b, b_dot] (8x1)
-        sat_j_state: State vector of receiving satellite [p, v, b, b_dot] (8x1)
-        n_states_total: Total number of states in network (8 * n_satellites)
+        sat_i_idx: Index of transmitting satellite (0 to N_v-1)
+        sat_j_idx: Index of receiving satellite (0 to N_v-1)
+        sat_states: Complete network state vector (8*N_v x 1)
+        n_states_per_sat: Number of states per satellite (default 8)
     
     Returns:
         Sparse Jacobian row vector (1 x n_states_total)
     
     Example:
-        >>> sat_i = np.array([7000e3, 0, 0, 0, 7.5e3, 0, 1e-6, 0])
-        >>> sat_j = np.array([0, 7000e3, 0, -7.5e3, 0, 0, 2e-6, 0])
-        >>> H = build_jacobian(sat_i, sat_j, 32)  # 4 satellites
+        >>> sat_states = np.random.randn(32)  # 4 satellites
+        >>> H = build_jacobian(0, 2, sat_states)  # Link from sat 0 to sat 2
     """
-    # Extract positions
+    n_states_total = len(sat_states)
+    n_satellites = n_states_total // n_states_per_sat
+    
+    # Validate indices
+    if sat_i_idx < 0 or sat_i_idx >= n_satellites:
+        raise ValueError(f"Invalid transmitter index: {sat_i_idx}")
+    if sat_j_idx < 0 or sat_j_idx >= n_satellites:
+        raise ValueError(f"Invalid receiver index: {sat_j_idx}")
+    if sat_i_idx == sat_j_idx:
+        raise ValueError("Transmitter and receiver must be different")
+    
+    # Extract satellite states
+    i_start = sat_i_idx * n_states_per_sat
+    j_start = sat_j_idx * n_states_per_sat
+    
+    sat_i_state = sat_states[i_start:i_start + n_states_per_sat]
+    sat_j_state = sat_states[j_start:j_start + n_states_per_sat]
+    
+    # Extract positions (first 3 elements of each state)
     p_i = sat_i_state[:3]
     p_j = sat_j_state[:3]
     
@@ -97,8 +111,8 @@ def build_jacobian(sat_i_state: np.ndarray, sat_j_state: np.ndarray,
     delta_p = p_j - p_i
     distance = np.linalg.norm(delta_p)
     
-    if distance < 1e-6:  # Avoid division by zero
-        warnings.warn("Satellites too close, Jacobian may be singular")
+    if distance < 1e-6:
+        warnings.warn(f"Satellites {sat_i_idx} and {sat_j_idx} too close, Jacobian may be singular")
         u_ij = np.zeros(3)
     else:
         u_ij = delta_p / distance
@@ -106,25 +120,19 @@ def build_jacobian(sat_i_state: np.ndarray, sat_j_state: np.ndarray,
     # Initialize sparse Jacobian
     H = np.zeros((1, n_states_total))
     
-    # Find satellite indices (assuming sequential ordering)
-    # This is a simplified version - in practice, you'd track satellite IDs
-    sat_i_idx = 0  # Would be determined from satellite ID
-    sat_j_idx = 1  # Would be determined from satellite ID
-    
     # Fill non-zero elements
     # Partial derivatives w.r.t sat_i position
-    H[0, sat_i_idx*8 : sat_i_idx*8+3] = -u_ij / SPEED_OF_LIGHT
+    H[0, i_start:i_start+3] = -u_ij / SPEED_OF_LIGHT
     
-    # Partial derivatives w.r.t sat_j position
-    H[0, sat_j_idx*8 : sat_j_idx*8+3] = u_ij / SPEED_OF_LIGHT
+    # Partial derivatives w.r.t sat_j position  
+    H[0, j_start:j_start+3] = u_ij / SPEED_OF_LIGHT
     
     # Partial derivatives w.r.t clock biases
-    H[0, sat_i_idx*8 + 6] = -1  # sat_i clock bias
-    H[0, sat_j_idx*8 + 6] = 1   # sat_j clock bias
-    
-    # Velocities (indices 3-5) and clock drifts (index 7) remain zero
+    H[0, i_start + 6] = -1  # sat_i clock bias
+    H[0, j_start + 6] = 1   # sat_j clock bias
     
     return H
+
 
 
 def predict_info(J_prev: np.ndarray, y_prev: np.ndarray,
@@ -203,22 +211,22 @@ def predict_info(J_prev: np.ndarray, y_prev: np.ndarray,
 
 
 def update_info(J_prior: np.ndarray, y_prior: np.ndarray,
-               H_list: List[np.ndarray], R_list: List[float],
+               active_links: List[Tuple[int, int]],
+               sat_states: np.ndarray,
+               R_list: List[float],
                z_list: List[float],
                correlated_noise: bool = False,
                correlation_matrix: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
     """
     Information filter measurement update (correction) step.
     
-    Implements equations (12)-(13) from Section III.C for independent noise,
-    or equation (15) for correlated noise using Woodbury identity.
-    
     Args:
         J_prior: Prior information matrix (n x n)
         y_prior: Prior information vector (n x 1)
-        H_list: List of Jacobian row vectors for active links
-        R_list: List of measurement noise variances (σ²_meas,ℓ)
-        z_list: List of actual measurements
+        active_links: List of (sat_i_idx, sat_j_idx) tuples for active ISLs
+        sat_states: Current network state vector
+        R_list: List of measurement noise variances in s² (TOA variance)
+        z_list: List of actual TOA measurements in seconds
         correlated_noise: If True, use correlation_matrix
         correlation_matrix: Full noise covariance C_n (if correlated)
     
@@ -230,32 +238,33 @@ def update_info(J_prior: np.ndarray, y_prior: np.ndarray,
     J_post = J_prior.copy()
     y_post = y_prior.copy()
     
-    if not H_list:  # No measurements
+    if not active_links:  # No measurements
         return J_post, y_post
+    
+    # Build Jacobian for each active link
+    H_list = []
+    for sat_i_idx, sat_j_idx in active_links:
+        H = build_jacobian(sat_i_idx, sat_j_idx, sat_states)
+        H_list.append(H)
     
     if correlated_noise and correlation_matrix is not None:
         # Stack all Jacobians
         H = np.vstack(H_list)
         z = np.array(z_list).reshape(-1, 1)
         
-        # Use Woodbury identity for efficient inversion of C_n
-        # C_n = D + σ²_clk * A * A^T (low-rank structure)
-        # C_n^{-1} = D^{-1} - D^{-1}A(A^T D^{-1}A + σ^{-2}_clk I)^{-1}A^T D^{-1}
-        
-        # For now, use direct inversion (can optimize with Woodbury later)
+        # Use Woodbury identity for efficient inversion
         try:
             C_n_inv = np.linalg.inv(correlation_matrix)
         except np.linalg.LinAlgError:
             warnings.warn("Correlation matrix singular, using pseudo-inverse")
             C_n_inv = np.linalg.pinv(correlation_matrix)
         
-        # Update with correlated measurements - equation (15)
+        # Update with correlated measurements
         J_post = J_prior + H.T @ C_n_inv @ H
         y_post = y_prior + H.T @ C_n_inv @ z
         
     else:
-        # Independent measurements - equations (12)-(13)
-        # Simple addition of individual link contributions
+        # Independent measurements - simple addition
         for H_ell, R_ell, z_ell in zip(H_list, R_list, z_list):
             # Each link's information contribution
             J_ell = H_ell.T @ H_ell / R_ell
@@ -269,6 +278,7 @@ def update_info(J_prior: np.ndarray, y_prior: np.ndarray,
     J_post = 0.5 * (J_post + J_post.T)
     
     return J_post, y_post
+
 
 
 def calculate_efim(J_full: np.ndarray,
@@ -683,6 +693,22 @@ def test_recursive_filtering():
     
     print("✓ Recursive filtering test passed")
 
+def prepare_measurement_noise_for_fim(range_variance_m2: float) -> float:
+    """
+    Convert range variance (m²) to TOA variance (s²) for FIM calculations.
+    
+    The FIM framework expects time-domain measurement noise since the
+    Jacobian H is derived for TOA measurements in seconds.
+    
+    Args:
+        range_variance_m2: Range measurement variance in m²
+    
+    Returns:
+        TOA measurement variance in s²
+    """
+    # Convert range variance to time variance
+    toa_variance_s2 = range_variance_m2 / (SPEED_OF_LIGHT**2)
+    return toa_variance_s2
 
 if __name__ == "__main__":
     """Run all unit tests and demonstrate usage."""
