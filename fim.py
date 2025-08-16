@@ -199,26 +199,25 @@ def predict_info(J_prev: np.ndarray, y_prev: np.ndarray,
     return J_prior, y_prior
 
 
-# 改动2: update_info 函数中的单位转换
 def update_info(J_prior: np.ndarray, y_prior: np.ndarray,
                active_links: List[Tuple[int, int]],
                sat_states: np.ndarray,
-               range_variance_list: List[float],  # 改动: 明确是 range variance in m²
+               range_variance_list: List[float],
                z_list: List[float],
                correlated_noise: bool = False,
                correlation_matrix: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
     """
-    CRITICAL: 输入是 range variances (m²)，内部转换为 TOA variances (s²)
-    """
-    """
     Information filter measurement update (correction) step.
+    
+    CRITICAL: This function expects range variances (m²) and converts them
+    to TOA variances (s²) internally for FIM calculation.
     
     Args:
         J_prior: Prior information matrix (n x n)
         y_prior: Prior information vector (n x 1)
         active_links: List of (sat_i_idx, sat_j_idx) tuples for active ISLs
         sat_states: Current network state vector
-        R_list: List of measurement noise variances in s² (TOA variance)
+        range_variance_list: List of range measurement variances in m² (NOT s²!)
         z_list: List of actual TOA measurements in seconds
         correlated_noise: If True, use correlation_matrix
         correlation_matrix: Full noise covariance C_n (if correlated)
@@ -236,26 +235,32 @@ def update_info(J_prior: np.ndarray, y_prior: np.ndarray,
     
     # Build Jacobian for each active link
     H_list = []
+    R_list = []  # 修正: 初始化 R_list！！！ TOA variances in s²
+    
     for (sat_i_idx, sat_j_idx), range_var_m2 in zip(active_links, range_variance_list):
-            # Build Jacobian using generic function
-            H = build_jacobian(sat_i_idx, sat_j_idx, sat_states)
-            H_list.append(H)
-            
-            # 关键改动: 单位转换 m² -> s²
-            toa_variance_s2 = range_var_m2 / (SPEED_OF_LIGHT**2)
-            R_list.append(toa_variance_s2)
+        # Build Jacobian using generic function
+        H = build_jacobian(sat_i_idx, sat_j_idx, sat_states)
+        H_list.append(H)
+        
+        # CRITICAL UNIT CONVERSION: Convert range variance (m²) to TOA variance (s²)
+        # Since H is derived for TOA measurements in seconds
+        toa_variance_s2 = range_var_m2 / (SPEED_OF_LIGHT**2)
+        R_list.append(toa_variance_s2)
     
     if correlated_noise and correlation_matrix is not None:
         # Stack all Jacobians
         H = np.vstack(H_list)
         z = np.array(z_list).reshape(-1, 1)
         
+        # Convert correlation matrix from range domain to TOA domain
+        C_n_toa = correlation_matrix / (SPEED_OF_LIGHT**2)
+        
         # Use Woodbury identity for efficient inversion
         try:
-            C_n_inv = np.linalg.inv(correlation_matrix)
+            C_n_inv = np.linalg.inv(C_n_toa)
         except np.linalg.LinAlgError:
             warnings.warn("Correlation matrix singular, using pseudo-inverse")
-            C_n_inv = np.linalg.pinv(correlation_matrix)
+            C_n_inv = np.linalg.pinv(C_n_toa)
         
         # Update with correlated measurements
         J_post = J_prior + H.T @ C_n_inv @ H
@@ -263,10 +268,10 @@ def update_info(J_prior: np.ndarray, y_prior: np.ndarray,
         
     else:
         # Independent measurements - simple addition
-        for H_ell, R_ell, z_ell in zip(H_list, R_list, z_list):
+        for H_ell, R_ell_s2, z_ell in zip(H_list, R_list, z_list):
             # Each link's information contribution
-            J_ell = H_ell.T @ H_ell / R_ell
-            y_ell = H_ell.T * z_ell / R_ell
+            J_ell = H_ell.T @ H_ell / R_ell_s2  # Using TOA variance
+            y_ell = H_ell.T * z_ell / R_ell_s2
             
             # Add to network totals
             J_post += J_ell
