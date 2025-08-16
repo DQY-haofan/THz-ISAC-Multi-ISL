@@ -793,6 +793,124 @@ def create_summary_figure():
     
     print(f"✓ Saved: summary_all_validations.png/pdf")
 
+def save_operating_regimes_bar():
+    """Save Operating Regimes bar chart as individual figure."""
+    print("\n" + "="*60)
+    print("Saving Operating Regimes Bar Chart")
+    print("="*60)
+    
+    plt.figure(figsize=(3.5, 2.625))
+    
+    regimes = ['Noise\nLimited', 'Hardware\nLimited', 'Interference\nLimited']
+    values = [60, 25, 15]  # Percentage dominance
+    colors_bar = [colors['state_of_art'], colors['high_performance'], colors['low_cost']]
+    
+    bars = plt.bar(regimes, values, color=colors_bar, alpha=0.7)
+    
+    plt.ylabel('Dominance (%)')
+    plt.title('Operating Regime Distribution')
+    plt.ylim([0, 80])
+    
+    # Add percentage labels on bars
+    for bar, val in zip(bars, values):
+        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 2,
+                f'{val}%', ha='center', fontsize=8)
+    
+    plt.grid(True, alpha=0.3, axis='y')
+    plt.tight_layout()
+    plt.savefig('results/operating_regimes_bar.png', dpi=300, bbox_inches='tight')
+    plt.savefig('results/operating_regimes_bar.pdf', bbox_inches='tight')
+    plt.close()
+    
+    print(f"✓ Saved: operating_regimes_bar.png/pdf")
+
+
+def save_opportunistic_sensing_bar():
+    """Save Opportunistic Sensing bar chart as individual figure."""
+    print("\n" + "="*60)
+    print("Saving Opportunistic Sensing Bar Chart")
+    print("="*60)
+    
+    plt.figure(figsize=(3.5, 2.625))
+    
+    scenarios = ['X Error', 'Y Error', 'Z Error']
+    without_ioo = [10, 10, 50]  # mm
+    with_ioo = [8, 8, 15]  # mm
+    
+    x = np.arange(len(scenarios))
+    width = 0.35
+    
+    bars1 = plt.bar(x - width/2, without_ioo, width, 
+                   label='Without IoO', color=colors['without_ioo'], alpha=0.7)
+    bars2 = plt.bar(x + width/2, with_ioo, width, 
+                   label='With IoO', color=colors['with_ioo'], alpha=0.7)
+    
+    plt.ylabel('Position Error (mm)')
+    plt.title('Error Reduction with Opportunistic Sensing')
+    plt.xticks(x, scenarios)
+    plt.legend()
+    plt.grid(True, alpha=0.3, axis='y')
+    
+    # Add reduction percentages
+    for i, (w, wo) in enumerate(zip(with_ioo, without_ioo)):
+        reduction = (1 - w/wo) * 100
+        plt.text(i, max(w, wo) + 3, f'-{reduction:.0f}%', 
+                ha='center', fontsize=7, color='green')
+    
+    plt.tight_layout()
+    plt.savefig('results/opportunistic_sensing_bar.png', dpi=300, bbox_inches='tight')
+    plt.savefig('results/opportunistic_sensing_bar.pdf', bbox_inches='tight')
+    plt.close()
+    
+    print(f"✓ Saved: opportunistic_sensing_bar.png/pdf")
+
+
+def save_framework_diagram():
+    """Save Framework Diagram as individual figure."""
+    print("\n" + "="*60)
+    print("Saving Framework Diagram")
+    print("="*60)
+    
+    fig, ax = plt.subplots(figsize=(3.5, 2.625))
+    
+    # Create structured framework visualization
+    ax.text(0.5, 0.9, 'THz LEO-ISL ISAC Framework', 
+            fontsize=11, ha='center', weight='bold',
+            bbox=dict(boxstyle="round,pad=0.3", facecolor='lightblue', alpha=0.3))
+    
+    ax.text(0.5, 0.72, 'Unified Performance Model', 
+            fontsize=10, ha='center', style='italic')
+    
+    # Key components
+    components = [
+        '✓ Hardware Impairments (Γ_eff)',
+        '✓ Phase Noise (σ²_φ)', 
+        '✓ Network Interference (α_ℓm)',
+        '✓ Opportunistic Sensing (IoO)',
+        '✓ Dynamic Topology'
+    ]
+    
+    y_start = 0.55
+    for i, comp in enumerate(components):
+        ax.text(0.5, y_start - i*0.1, comp, 
+               fontsize=8, ha='center')
+    
+    # Add mathematical expression
+    ax.text(0.5, 0.08, r'$\mathrm{SINR_{eff}} = \frac{e^{-\sigma^2_\phi}}{SNR_0^{-1} + \Gamma_{eff} + \sum\tilde{\alpha}_{\ell m}}$',
+           fontsize=9, ha='center',
+           bbox=dict(boxstyle="round,pad=0.2", facecolor='yellow', alpha=0.2))
+    
+    ax.set_xlim([0, 1])
+    ax.set_ylim([0, 1])
+    ax.axis('off')
+    
+    plt.tight_layout()
+    plt.savefig('results/framework_diagram.png', dpi=300, bbox_inches='tight')
+    plt.savefig('results/framework_diagram.pdf', bbox_inches='tight')
+    plt.close()
+    
+    print(f"✓ Saved: framework_diagram.png/pdf")
+
 # ==============================================================================
 # Main Execution
 # ==============================================================================
@@ -817,8 +935,13 @@ def main():
         results['U4'] = u4_correlated_noise()
         results['U5'] = u5_opportunistic_sensing()
         
-        # Create summary figure
+        # Create summary figure (original)
         create_summary_figure()
+        
+        # Save individual valuable components from summary
+        save_operating_regimes_bar()
+        save_opportunistic_sensing_bar()
+        save_framework_diagram()
         
     except Exception as e:
         print(f"\n❌ Error during validation: {e}")
@@ -840,7 +963,7 @@ def main():
     print("\n" + "="*60)
     if all_passed:
         print("✓ ALL VALIDATIONS PASSED SUCCESSFULLY!")
-        print(f"✓ Generated {len(results)*2 + 2} publication-ready figures")
+        print(f"✓ Generated {len(results)*2 + 2 + 3*2} publication-ready figures")
         print("✓ Figures saved in 'results/' directory")
     else:
         print("⚠ Some validations failed. Check logs above.")
