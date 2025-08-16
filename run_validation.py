@@ -620,8 +620,8 @@ def u5_opportunistic_sensing():
     theta = np.linspace(0, 2*np.pi, 100)
     
     # Prior ellipse (X-Z plane)
-    a_prior = np.sqrt(crlb_prior[0, 0])
-    b_prior = np.sqrt(crlb_prior[2, 2])
+    a_prior = np.sqrt(crlb_prior[0, 0])  # Semi-axis in X
+    b_prior = np.sqrt(crlb_prior[2, 2])  # Semi-axis in Z
     x_prior = a_prior * np.cos(theta)
     z_prior = b_prior * np.sin(theta)
     
@@ -639,13 +639,25 @@ def u5_opportunistic_sensing():
              color=colors['state_of_art'], linewidth=1.5,
              label=f'With IoO (Vol={volume_post*1000:.2f} m³)')
     
-    # Add gradient direction
+    # Add gradient direction arrow
     grad_norm = geometry.gradient / np.linalg.norm(geometry.gradient)
-    plt.arrow(0, 0, grad_norm[0]*max(a_prior)*500, grad_norm[2]*max(b_prior)*500,
-             head_width=20, head_length=30, fc=colors['with_ioo'], 
-             ec=colors['with_ioo'], alpha=0.7, linewidth=1)
-    plt.text(grad_norm[0]*max(a_prior)*600, grad_norm[2]*max(b_prior)*600,
-            'IoO Info', fontsize=7, ha='center')
+    # 修正：直接使用 a_prior 和 b_prior，不需要 max()
+    arrow_length_x = a_prior * 500  # Scale factor for visibility
+    arrow_length_z = b_prior * 500  # Scale factor for visibility
+    
+    plt.arrow(0, 0, 
+             grad_norm[0] * arrow_length_x, 
+             grad_norm[2] * arrow_length_z,
+             head_width=20, head_length=30, 
+             fc=colors['with_ioo'], 
+             ec=colors['with_ioo'], 
+             alpha=0.7, 
+             linewidth=1)
+    
+    # Add text label for arrow
+    text_x = grad_norm[0] * arrow_length_x * 1.2
+    text_z = grad_norm[2] * arrow_length_z * 1.2
+    plt.text(text_x, text_z, 'IoO Info', fontsize=7, ha='center')
     
     plt.xlabel('X Position Error (mm)')
     plt.ylabel('Z Position Error (mm)')
