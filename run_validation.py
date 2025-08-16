@@ -841,8 +841,8 @@ def u4_correlated_noise():
     ax2.grid(True, alpha=0.3)
     ax2.set_ylim([0.5, 2.0])
     
-    # Subplot 3: Correlation matrix visualization
-    ax3 = axes[3]
+    # Subplot 3: Correlation matrix visualization (修正：使用axes[2]而不是axes[3])
+    ax3 = axes[2]  # 修正索引错误！
     
     # Create a sample correlation matrix for visualization
     n_show = 6  # Show first 6x6 block
