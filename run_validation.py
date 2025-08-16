@@ -151,7 +151,7 @@ def u0_classical_baseline():
         )
         
         # Range variance
-        range_var_m2 = calculate_range_variance_m2(
+        range_var_m2 = calculate_range_variance(
             sinr_eff, sigma_phi_squared=0, 
             f_c=300e9, bandwidth=10e9
         )
@@ -237,7 +237,7 @@ def u1_hardware_ceiling():
             )
             
             # Range variance and RMSE
-            range_var_m2 = calculate_range_variance_m2(
+            range_var_m2 = calculate_range_variance(
                 sinr_eff, 0, f_c=300e9, bandwidth=10e9
             )
             rmse = np.sqrt(range_var_m2) * 1000  # Convert to mm
@@ -310,7 +310,7 @@ def u2_phase_noise_floor():
             )
             
             # Range variance and RMSE
-            range_var_m2 = calculate_range_variance_m2(
+            range_var_m2 = calculate_range_variance(
                 sinr_eff, sigma_phi_sq, f_c=f_c, bandwidth=10e9
             )
             rmse = np.sqrt(range_var_m2) * 1000  # Convert to mm
@@ -398,7 +398,7 @@ def u3_interference_regimes():
             dominant_regimes.append(dominant_idx)
             
             # Calculate RMSE
-            range_var_m2 = calculate_range_variance_m2(
+            range_var_m2 = calculate_range_variance(
                 sinr_eff, sigma_phi_sq, f_c=300e9, bandwidth=10e9
             )
             rmse = np.sqrt(range_var_m2) * 1000
@@ -687,7 +687,7 @@ def create_summary_figure():
         rmse = []
         for s in snr_db:
             sinr = calculate_effective_sinr(10**(s/10), gamma, 0, 0, True, False, False)
-            var = calculate_range_variance_m2(sinr, 0, 3e11, 1e10)
+            var = calculate_range_variance(sinr, 0, 3e11, 1e10)
             rmse.append(np.sqrt(var)*1000)
         ax.semilogy(snr_db, rmse, 'o-', markersize=3, linewidth=1, label=label)
     ax.set_xlabel('SNR (dB)', fontsize=8)
@@ -703,7 +703,7 @@ def create_summary_figure():
         rmse = []
         for s in snr_db:
             sinr = calculate_effective_sinr(10**(s/10), 0, sigma_phi, 0, False, False, True)
-            var = calculate_range_variance_m2(sinr, sigma_phi, 3e11, 1e10)
+            var = calculate_range_variance(sinr, sigma_phi, 3e11, 1e10)
             rmse.append(np.sqrt(var)*1000)
         ax.semilogy(snr_db, rmse, 'o-', markersize=3, linewidth=1, label=label)
     ax.set_xlabel('SNR (dB)', fontsize=8)
