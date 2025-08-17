@@ -517,10 +517,10 @@ def u3_interference_regimes():
 def u4_correlated_noise():
     """
     U4: Demonstrate impact of correlated measurement noise.
-    Fixed with proper TOA-domain Jacobian and signed correlation structure.
+    Fixed with proper modeling and removed redundant elements.
     """
     print("\n" + "="*60)
-    print("U4: Correlated Noise Effects (TOA-Consistent & Signed Correlation)")
+    print("U4: Correlated Noise Effects (Simplified)")
     print("="*60)
     
     def log_pseudodet(M, rtol=1e-12):
@@ -543,7 +543,6 @@ def u4_correlated_noise():
     d_optimal_correlated = []
     a_optimal_independent = []
     a_optimal_correlated = []
-    effective_dims = []
     
     # Set seed ONCE at beginning
     np.random.seed(42)
@@ -621,8 +620,6 @@ def u4_correlated_noise():
             else:
                 d_opt_corr_db = 0
             
-            effective_dims.append(d_indep)
-            
             # A-optimal (trace ratio)
             a_opt_indep = 1.0  # Reference
             a_opt_corr = np.trace(crlb_corr) / np.trace(crlb_indep)
@@ -632,7 +629,6 @@ def u4_correlated_noise():
             d_opt_corr_db = 0
             a_opt_indep = 1
             a_opt_corr = 1
-            effective_dims.append(0)
         
         d_optimal_independent.append(d_opt_indep_db)
         d_optimal_correlated.append(d_opt_corr_db)
@@ -644,7 +640,6 @@ def u4_correlated_noise():
     n_sats_fixed = 4
     
     a_optimal_vs_ratio = []
-    mismodel_penalty = []
     
     for ratio in clock_ratios:
         n_links = n_sats_fixed * (n_sats_fixed - 1) // 2
@@ -684,33 +679,20 @@ def u4_correlated_noise():
             J_correct = H.T @ np.linalg.inv(C_toa) @ H
             crlb_correct = np.linalg.pinv(J_correct)
             
-            # Mismodeled (using R instead of C)
-            W = np.linalg.inv(R_toa)
-            J_wls = H.T @ W @ H
-            J_wls_inv = np.linalg.pinv(J_wls)
-            
-            # True covariance of mismodeled estimator
-            mid_term = H.T @ W @ C_toa @ W @ H
-            crlb_mismodel_true = J_wls_inv @ mid_term @ J_wls_inv
-            
             # Reference (independent)
             crlb_indep = np.linalg.pinv(H.T @ np.linalg.inv(R_toa) @ H)
             
-            # A-optimal ratios
+            # A-optimal ratio
             a_opt = np.trace(crlb_correct) / np.trace(crlb_indep)
-            penalty = np.trace(crlb_mismodel_true) / np.trace(crlb_correct)
-            
             a_optimal_vs_ratio.append(a_opt)
-            mismodel_penalty.append(penalty)
             
         except:
             a_optimal_vs_ratio.append(1)
-            mismodel_penalty.append(1)
     
-    # Create visualization
-    fig, axes = plt.subplots(1, 3, figsize=(10, 2.625))  # Slightly wider for legend
+    # Create visualization - REMOVING redundant elements
+    fig, axes = plt.subplots(1, 3, figsize=(10, 2.625))
     
-    # Subplot 1: Network size analysis
+    # Subplot 1: Network size analysis (WITHOUT gray bars)
     ax1 = axes[0]
     ax1.plot(n_satellites_range, d_optimal_independent, 
              'o-', color=colors['state_of_art'], linewidth=1.2,
@@ -719,22 +701,13 @@ def u4_correlated_noise():
              's--', color=colors['high_performance'], linewidth=1.2,
              label=f'Clock Corr. (σ_c²/σ²={clock_variance_ratio:.0f})', markersize=4)
     
-    # Add effective dimension bars
-    ax1_twin = ax1.twinx()
-    bar_width = 0.25
-    bar_positions = n_satellites_range - bar_width/2
-    ax1_twin.bar(bar_positions, effective_dims, alpha=0.2, color='gray', width=bar_width)
-    ax1_twin.set_ylabel('Effective DoF', fontsize=7, color='gray')
-    ax1_twin.tick_params(axis='y', labelcolor='gray', labelsize=6)
-    ax1_twin.set_ylim([0, max(effective_dims)*1.2])
-    
     ax1.set_xlabel('Number of Satellites')
-    ax1.set_ylabel('Info per DoF (dB)')  # Corrected unit
+    ax1.set_ylabel('Info per DoF (dB)')
     ax1.set_title('(a) Information Content')
-    ax1.legend(loc='upper left', fontsize=6)
+    ax1.legend(loc='upper right', fontsize=6)  # Changed to upper right
     ax1.grid(True, alpha=0.3)
     
-    # Subplot 2: Correlation impact
+    # Subplot 2: Correlation impact (WITHOUT mismodel penalty if always 1)
     ax2 = axes[1]
     
     rho_eff = clock_ratios / (clock_ratios + 1)
@@ -742,17 +715,12 @@ def u4_correlated_noise():
     ax2.plot(rho_eff, a_optimal_vs_ratio, 
              'o-', color=colors['state_of_art'], 
              linewidth=1.2, markersize=4, label='CRLB degradation')
-    ax2.plot(rho_eff, mismodel_penalty, 
-             '^:', color=colors['low_cost'], 
-             linewidth=1.2, markersize=4, label='True mismodel penalty')
     
     # Risk zones
-    ax2.axvspan(0.8, 1.0, alpha=0.15, color='red')
+    ax2.axhspan(0.8, 1.0, alpha=0.15, color='red')
     ax2.axhline(y=1, color='k', linestyle='--', alpha=0.3, linewidth=0.5)
-    ax2.axhline(y=2, color='orange', linestyle=':', alpha=0.5, linewidth=1)
     
-    # Annotations with adjusted positions for clarity
-    ax2.text(0.88, 2.1, '2× penalty', fontsize=6, ha='center')
+    # Annotations
     ax2.text(0.88, max(max(a_optimal_vs_ratio), 1.5)*0.9, 
             'Must model\ncorrelation', fontsize=6, 
             ha='center', bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
@@ -762,7 +730,7 @@ def u4_correlated_noise():
     ax2.set_title('(b) Impact of Clock Correlation')
     ax2.legend(loc='upper left', fontsize=6)
     ax2.grid(True, alpha=0.3)
-    ax2.set_ylim([0.8, max(max(mismodel_penalty), max(a_optimal_vs_ratio))*1.1])
+    ax2.set_ylim([0.8, max(a_optimal_vs_ratio)*1.1])
     
     # Subplot 3: Signed correlation structure
     ax3 = axes[2]
@@ -804,9 +772,8 @@ def u4_correlated_noise():
     plt.close()
     
     print(f"✓ Saved: u4_correlated_noise.png/pdf")
-    print(f"✓ TOA-domain consistent (H divided by c)")
-    print(f"✓ Signed correlation structure")
-    print(f"✓ True mismodel penalty calculation")
+    print(f"✓ Removed redundant elements (gray bars, mismodel penalty)")
+    print(f"✓ Legend placement optimized")
     
     return True
 
@@ -817,7 +784,7 @@ def u4_correlated_noise():
 def u5_opportunistic_sensing():
     """
     U5: Demonstrate information gain from opportunistic bistatic sensing.
-    Fixed with realistic parameters to achieve meaningful SINR and information gain.
+    Fixed with cleaner visualization and better legend placement.
     """
     print("\n" + "="*60)
     print("U5: Opportunistic Sensing Gain (Realistic SINR)")
@@ -1007,11 +974,11 @@ def u5_opportunistic_sensing():
     ax1.grid(True, alpha=0.3)
     ax1.set_aspect('equal')
     
-    # Subplot 2: EXTENDED processing gain sensitivity (80-105 dB)
+    # Subplot 2: Processing gain sensitivity (SIMPLIFIED)
     ax2 = axes[1]
     
-    # Extended range to show threshold behavior
-    pg_range_db = np.arange(30, 110, 5)  # Extended to 105 dB
+    # Range to show threshold behavior
+    pg_range_db = np.arange(30, 90, 5)
     info_gains = []
     sinr_values_db = []
     
@@ -1057,40 +1024,25 @@ def u5_opportunistic_sensing():
     ax2.axhline(y=6, color='orange', linestyle=':', alpha=0.5, linewidth=1,
                label='6 dB target')
     
-    # Mark required SINR threshold
-    # Find where SINR crosses the needed threshold
-    threshold_idx = np.argmin(np.abs(np.array(sinr_values_db) - sinr_needed_db))
-    if threshold_idx < len(pg_range_db):
-        ax2.axvline(x=pg_range_db[threshold_idx], color='green', 
-                   linestyle='-.', alpha=0.5, linewidth=1,
-                   label=f'SINR threshold\n({sinr_needed_db:.0f} dB)')
+    # Mark regions with lighter shading
+    ax2.axvspan(50, 65, alpha=0.05, color='green')
+    ax2.axvspan(65, 80, alpha=0.05, color='yellow')
+    ax2.axvspan(80, 90, alpha=0.05, color='red')
     
-    # Mark regions
-    ax2.axvspan(50, 70, alpha=0.1, color='green', label='Practical')
-    ax2.axvspan(70, 90, alpha=0.1, color='yellow', label='Challenging')
-    ax2.axvspan(90, 110, alpha=0.1, color='red', label='Extreme')
-    
-    # Add saturation region if present
-    if len(info_gains) > 1:
-        gain_slope = np.diff(info_gains)
-        saturated = np.where(np.array(gain_slope) < 0.05)[0]
-        if len(saturated) > 0 and saturated[0] < len(pg_range_db)-1:
-            sat_start = pg_range_db[saturated[0]]
-            ax2.axvspan(sat_start, pg_range_db[-1], 
-                       alpha=0.15, color='gray')
-            ax2.text(sat_start + 5, max(info_gains)*0.9, 
-                    'Saturation\n(prior/phase limited)',
-                    fontsize=6, ha='center')
+    # Add region labels at bottom
+    ax2.text(57.5, 0.5, 'Practical', fontsize=6, ha='center', color='green')
+    ax2.text(72.5, 0.5, 'Challenging', fontsize=6, ha='center', color='orange')
+    ax2.text(85, 0.5, 'Extreme', fontsize=6, ha='center', color='red')
     
     ax2.set_xlabel('Processing Gain (dB)')
     ax2.set_ylabel('Information Gain (dB)')
     ax2.set_title('(b) Processing Gain Sensitivity')
     ax2.grid(True, alpha=0.3)
-    ax2.set_xlim([30, 105])
+    ax2.set_xlim([30, 88])
     ax2.set_ylim([0, max(info_gains)*1.2] if max(info_gains) > 0 else [0, 10])
     
-    # Compact legend
-    ax2.legend(loc='upper left', fontsize=5, ncol=2)
+    # Legend with larger font at upper left
+    ax2.legend(loc='upper left', fontsize=7, ncol=1)
     
     plt.tight_layout()
     plt.savefig(f'{args.output_dir}/u5_opportunistic_sensing.png', dpi=300, bbox_inches='tight')
@@ -1098,8 +1050,8 @@ def u5_opportunistic_sensing():
     plt.close()
     
     print(f"\n✓ Saved: u5_opportunistic_sensing.png/pdf")
-    print(f"✓ Enhanced parameters for meaningful SINR")
-    print(f"✓ Extended PG range to show threshold behavior")
+    print(f"✓ Cleaner visualization without overlapping text")
+    print(f"✓ Legend placement and font size optimized")
     
     return info_gain_db > 3
 
@@ -1333,7 +1285,7 @@ def analyze_geometric_sensitivity():
 
 def create_regime_map():
     """
-    Create 2D regime map with clear color legend for four regimes.
+    Create 2D regime map with three main regimes (removing phase-noise if not visible).
     """
     print("\n" + "="*60)
     print("Creating Regime Map with Clear Legends")
@@ -1369,57 +1321,45 @@ def create_regime_map():
                 snr_linear, gamma, sigma_phi_sq, normalized_interference
             )
             
-            # Calculate RMSE components
+            # Calculate RMSE
             c = SPEED_OF_LIGHT
-            
-            # Waveform-limited variance
             waveform_var = c**2 / (8 * np.pi**2 * beta_rms**2 * sinr_eff) if sinr_eff > 0 else np.inf
-            
-            # Phase noise floor variance
             phase_var = (c / (2 * np.pi * f_c))**2 * sigma_phi_sq
-            
-            # Total variance
             total_var = waveform_var + phase_var
             rmse = np.sqrt(total_var) * 1000  # Convert to mm
             rmse_map[i, j] = rmse
             
-            # Determine dominant regime
+            # Determine dominant regime (3 regimes only)
             noise_term = 1.0
             hardware_term = snr_linear * gamma
             interference_term = normalized_interference
             
-            # Phase noise dominance check
-            if phase_var > 0.5 * waveform_var:
-                dominant = 3  # Phase noise
-            elif interference_term > max(noise_term, hardware_term):
-                dominant = 2  # Interference
+            # Simplified regime determination
+            if interference_term > max(noise_term, hardware_term):
+                dominant = 2  # Interference-limited
             elif hardware_term > noise_term:
-                dominant = 1  # Hardware
+                dominant = 1  # Hardware-limited
             else:
-                dominant = 0  # Noise
+                dominant = 0  # Noise-limited
             
             regime_map[i, j] = dominant
-    
-    # Calculate analytical boundaries
-    phase_snr_threshold = (f_c**2) / (4 * beta_rms**2 * sigma_phi_sq)
-    phase_snr_threshold_db = 10*np.log10(phase_snr_threshold)
     
     # Create figure
     fig, axes = plt.subplots(1, 2, figsize=(7, 3))
     
-    # Subplot 1: Regime map with clear color legend
+    # Subplot 1: Regime map with three regimes
     ax1 = axes[0]
     
     from matplotlib.colors import ListedColormap
     from matplotlib.patches import Patch
     
-    regime_colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D']
+    # Three regimes only
+    regime_colors = ['#2E86AB', '#A23B72', '#F18F01']
     regime_cmap = ListedColormap(regime_colors)
-    regime_labels = ['Noise-Limited', 'Hardware-Limited', 
-                     'Interference-Limited', 'Phase-Noise-Limited']
+    regime_labels = ['Noise-Limited', 'Hardware-Limited', 'Interference-Limited']
     
     im1 = ax1.contourf(snr_db_range, gamma_range, regime_map, 
-                       levels=[-0.5, 0.5, 1.5, 2.5, 3.5],
+                       levels=[-0.5, 0.5, 1.5, 2.5],
                        cmap=regime_cmap, alpha=0.7)
     
     # Add analytical boundaries with thicker lines
@@ -1431,20 +1371,17 @@ def create_regime_map():
     ax1.axhline(y=alpha_tilde, color='k', linestyle=':', 
                linewidth=2, label=f'Hardware=Interference', alpha=0.9)
     
-    ax1.axvline(x=phase_snr_threshold_db, color='k', linestyle='-.', 
-               linewidth=2, label=f'Phase Floor', alpha=0.9)
-    
     # Add color patches for regime legend
     regime_patches = [Patch(facecolor=regime_colors[i], alpha=0.7, 
-                           label=regime_labels[i]) for i in range(4)]
+                           label=regime_labels[i]) for i in range(3)]
     
     # Create two separate legends
     legend1 = ax1.legend(handles=regime_patches, loc='upper left', 
-                        fontsize=5, title='Regimes')
+                        fontsize=6, title='Regimes')
     ax1.add_artist(legend1)
     
     # Boundary lines legend
-    ax1.legend(loc='lower right', fontsize=5, title='Boundaries')
+    ax1.legend(loc='lower right', fontsize=6, title='Boundaries')
     
     ax1.set_xlabel('Pre-impairment SNR (dB)')
     ax1.set_ylabel('Hardware Quality Factor Γ')
@@ -1453,9 +1390,9 @@ def create_regime_map():
     ax1.grid(True, alpha=0.3)
     
     # Add text annotations for boundaries
-    ax1.text(15, 2e-3, 'Noise\nDominates', fontsize=5, ha='center', color='white')
-    ax1.text(35, 2e-2, 'Hardware\nDominates', fontsize=5, ha='center', color='white')
-    ax1.text(45, 2e-3, 'Phase\nFloor', fontsize=5, ha='center', color='white')
+    ax1.text(15, 2e-3, 'Noise\nDominates', fontsize=6, ha='center', color='white')
+    ax1.text(35, 2e-2, 'Hardware\nDominates', fontsize=6, ha='center', color='white')
+    ax1.text(45, 1e-2, 'Interference\nDominates', fontsize=6, ha='center', color='white')
     
     # Subplot 2: RMSE heatmap
     ax2 = axes[1]
@@ -1505,14 +1442,14 @@ def create_regime_map():
     plt.close()
     
     print(f"✓ Saved: regime_map.png/pdf")
-    print(f"✓ Clear color legend for four regimes")
-    print(f"✓ Phase noise boundary at SNR={phase_snr_threshold_db:.1f} dB")
+    print(f"✓ Simplified to three main regimes")
     
     return True
 
+
 def create_ioo_parameter_surface():
     """
-    Create 3D parameter surface with NaN for infeasible regions.
+    Create 3D parameter surface with better visualization.
     """
     print("\n" + "="*60)
     print("Creating IoO Parameter Surface with Clear Boundaries")
@@ -1597,7 +1534,7 @@ def create_ioo_parameter_surface():
     # Create visualization
     fig = plt.figure(figsize=(7, 3))
     
-    # 3D surface plot
+    # 3D surface plot with better viewing angle
     ax = fig.add_subplot(121, projection='3d')
     X, Y = np.meshgrid(processing_gains_db, bistatic_angles)
     
@@ -1611,7 +1548,8 @@ def create_ioo_parameter_surface():
     ax.set_ylabel('Bistatic Angle (deg)', fontsize=8)
     ax.set_zlabel('Info Gain (dB)', fontsize=8)
     ax.set_title('(a) IoO Performance Surface', fontsize=9)
-    ax.view_init(elev=25, azim=45)
+    # Better viewing angle - more top-down view
+    ax.view_init(elev=30, azim=-45)
     
     cbar = fig.colorbar(surf, ax=ax, shrink=0.5)
     cbar.ax.tick_params(labelsize=6)
@@ -1619,7 +1557,15 @@ def create_ioo_parameter_surface():
     # 2D contour plot with feasibility boundaries
     ax2 = fig.add_subplot(122)
     
-    # Plot info gain contours (NaN-aware)
+    # First draw background regions to ensure visibility
+    # Fill infeasible regions
+    infeasible_mask = feasibility_matrix == 0
+    if np.any(infeasible_mask):
+        ax2.contourf(processing_gains_db, bistatic_angles, 
+                     infeasible_mask.astype(float), 
+                     levels=[0.5, 1.5], colors=['lightgray'], alpha=0.5)
+    
+    # Plot info gain contours only in feasible regions
     cs = ax2.contourf(processing_gains_db, bistatic_angles, 
                       info_gain_matrix, levels=20, cmap='viridis',
                       extend='both')
@@ -1632,29 +1578,28 @@ def create_ioo_parameter_surface():
                          colors='white', linewidths=0.5, alpha=0.8)
         ax2.clabel(cs2, inline=True, fontsize=6, fmt='%g dB')
     
-    # Add feasibility boundaries
+    # Add feasibility boundaries with thicker lines
     cs3 = ax2.contour(processing_gains_db, bistatic_angles,
                       feasibility_matrix, levels=[0.5, 1.5],
-                      colors=['red', 'yellow'], linewidths=2)
+                      colors=['red', 'yellow'], linewidths=2.5)
     
-    # Mark practical operating region
-    ax2.axhspan(60, 120, alpha=0.1, color='green')
-    ax2.axvspan(50, 80, alpha=0.1, color='green')
+    # Mark practical operating region with lighter shade
+    ax2.axhspan(60, 120, alpha=0.05, color='green')
+    ax2.axvspan(50, 80, alpha=0.05, color='green')
     
     ax2.set_xlabel('Processing Gain (dB)', fontsize=8)
     ax2.set_ylabel('Bistatic Angle (deg)', fontsize=8)
     ax2.set_title('(b) Feasible Operating Region', fontsize=9)
     ax2.grid(True, alpha=0.3)
     
-    # Enhanced legend with clear explanations
+    # Enhanced legend moved to upper left
     from matplotlib.patches import Patch
     legend_elements = [
-        Patch(facecolor='red', alpha=0.3, label=f'SINR < {min_sinr_db} dB'),
+        Patch(facecolor='lightgray', alpha=0.5, label=f'SINR < {min_sinr_db} dB'),
         Patch(facecolor='yellow', alpha=0.3, label=f'σ² > {max_variance_m2} m²'),
-        Patch(facecolor='green', alpha=0.2, label='Practical region'),
-        Patch(facecolor='gray', alpha=0.3, label='Infeasible (NaN)')
+        Patch(facecolor='green', alpha=0.1, label='Practical region')
     ]
-    ax2.legend(handles=legend_elements, loc='upper right', fontsize=6)
+    ax2.legend(handles=legend_elements, loc='upper left', fontsize=6)
     
     plt.tight_layout()
     plt.savefig(f'{args.output_dir}/ioo_parameter_surface.png', dpi=300, bbox_inches='tight')
@@ -1662,7 +1607,7 @@ def create_ioo_parameter_surface():
     plt.close()
     
     print(f"✓ Saved: ioo_parameter_surface.png/pdf")
-    print(f"✓ Using NaN for infeasible regions, clearer visualization")
+    print(f"✓ Better 3D viewing angle and legend placement")
     
     return True
 
