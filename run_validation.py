@@ -517,10 +517,10 @@ def u3_interference_regimes():
 def u4_correlated_noise():
     """
     U4: Demonstrate impact of correlated measurement noise.
-    Fixed with proper modeling and removed redundant elements.
+    Fixed with proper annotations in subplot (b).
     """
     print("\n" + "="*60)
-    print("U4: Correlated Noise Effects (Simplified)")
+    print("U4: Correlated Noise Effects (TOA-Consistent & Signed Correlation)")
     print("="*60)
     
     def log_pseudodet(M, rtol=1e-12):
@@ -543,6 +543,7 @@ def u4_correlated_noise():
     d_optimal_correlated = []
     a_optimal_independent = []
     a_optimal_correlated = []
+    effective_dims = []
     
     # Set seed ONCE at beginning
     np.random.seed(42)
@@ -620,6 +621,8 @@ def u4_correlated_noise():
             else:
                 d_opt_corr_db = 0
             
+            effective_dims.append(d_indep)
+            
             # A-optimal (trace ratio)
             a_opt_indep = 1.0  # Reference
             a_opt_corr = np.trace(crlb_corr) / np.trace(crlb_indep)
@@ -629,6 +632,7 @@ def u4_correlated_noise():
             d_opt_corr_db = 0
             a_opt_indep = 1
             a_opt_corr = 1
+            effective_dims.append(0)
         
         d_optimal_independent.append(d_opt_indep_db)
         d_optimal_correlated.append(d_opt_corr_db)
@@ -640,6 +644,7 @@ def u4_correlated_noise():
     n_sats_fixed = 4
     
     a_optimal_vs_ratio = []
+    mismodel_penalty = []
     
     for ratio in clock_ratios:
         n_links = n_sats_fixed * (n_sats_fixed - 1) // 2
@@ -679,20 +684,33 @@ def u4_correlated_noise():
             J_correct = H.T @ np.linalg.inv(C_toa) @ H
             crlb_correct = np.linalg.pinv(J_correct)
             
+            # Mismodeled (using R instead of C)
+            W = np.linalg.inv(R_toa)
+            J_wls = H.T @ W @ H
+            J_wls_inv = np.linalg.pinv(J_wls)
+            
+            # True covariance of mismodeled estimator
+            mid_term = H.T @ W @ C_toa @ W @ H
+            crlb_mismodel_true = J_wls_inv @ mid_term @ J_wls_inv
+            
             # Reference (independent)
             crlb_indep = np.linalg.pinv(H.T @ np.linalg.inv(R_toa) @ H)
             
-            # A-optimal ratio
+            # A-optimal ratios
             a_opt = np.trace(crlb_correct) / np.trace(crlb_indep)
+            penalty = np.trace(crlb_mismodel_true) / np.trace(crlb_correct)
+            
             a_optimal_vs_ratio.append(a_opt)
+            mismodel_penalty.append(penalty)
             
         except:
             a_optimal_vs_ratio.append(1)
+            mismodel_penalty.append(1)
     
-    # Create visualization - REMOVING redundant elements
+    # Create visualization
     fig, axes = plt.subplots(1, 3, figsize=(10, 2.625))
     
-    # Subplot 1: Network size analysis (WITHOUT gray bars)
+    # Subplot 1: Network size analysis
     ax1 = axes[0]
     ax1.plot(n_satellites_range, d_optimal_independent, 
              'o-', color=colors['state_of_art'], linewidth=1.2,
@@ -701,13 +719,22 @@ def u4_correlated_noise():
              's--', color=colors['high_performance'], linewidth=1.2,
              label=f'Clock Corr. (σ_c²/σ²={clock_variance_ratio:.0f})', markersize=4)
     
+    # Add effective dimension bars
+    ax1_twin = ax1.twinx()
+    bar_width = 0.25
+    bar_positions = n_satellites_range - bar_width/2
+    ax1_twin.bar(bar_positions, effective_dims, alpha=0.2, color='gray', width=bar_width)
+    ax1_twin.set_ylabel('Effective DoF', fontsize=7, color='gray')
+    ax1_twin.tick_params(axis='y', labelcolor='gray', labelsize=6)
+    ax1_twin.set_ylim([0, max(effective_dims)*1.2])
+    
     ax1.set_xlabel('Number of Satellites')
     ax1.set_ylabel('Info per DoF (dB)')
     ax1.set_title('(a) Information Content')
-    ax1.legend(loc='upper right', fontsize=6)  # Changed to upper right
+    ax1.legend(loc='upper left', fontsize=6)
     ax1.grid(True, alpha=0.3)
     
-    # Subplot 2: Correlation impact (WITHOUT mismodel penalty if always 1)
+    # Subplot 2: Correlation impact WITH PROPER ANNOTATION
     ax2 = axes[1]
     
     rho_eff = clock_ratios / (clock_ratios + 1)
@@ -715,22 +742,44 @@ def u4_correlated_noise():
     ax2.plot(rho_eff, a_optimal_vs_ratio, 
              'o-', color=colors['state_of_art'], 
              linewidth=1.2, markersize=4, label='CRLB degradation')
+    ax2.plot(rho_eff, mismodel_penalty, 
+             '^:', color=colors['low_cost'], 
+             linewidth=1.2, markersize=4, label='True mismodel penalty')
     
     # Risk zones
-    ax2.axhspan(0.8, 1.0, alpha=0.15, color='red')
+    ax2.axvspan(0.8, 1.0, alpha=0.15, color='red')
     ax2.axhline(y=1, color='k', linestyle='--', alpha=0.3, linewidth=0.5)
+    ax2.axhline(y=2, color='orange', linestyle=':', alpha=0.5, linewidth=1)
     
-    # Annotations
-    ax2.text(0.88, max(max(a_optimal_vs_ratio), 1.5)*0.9, 
-            'Must model\ncorrelation', fontsize=6, 
-            ha='center', bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
+    # Find where penalty exceeds threshold
+    penalty_threshold = 1.5
+    critical_rho = None
+    for i, penalty in enumerate(mismodel_penalty):
+        if penalty > penalty_threshold:
+            critical_rho = rho_eff[i]
+            break
+    
+    # FIXED: Add "Must model correlation" annotation
+    if critical_rho is not None:
+        ax2.axvline(x=critical_rho, color='red', linestyle='-.', alpha=0.3, linewidth=1)
+        ax2.text(critical_rho + 0.05, max(max(a_optimal_vs_ratio), max(mismodel_penalty))*0.8, 
+                'Must model\ncorrelation', fontsize=6, 
+                ha='left', bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
+    else:
+        # Place at high correlation region
+        ax2.text(0.9, max(max(a_optimal_vs_ratio), max(mismodel_penalty))*0.8, 
+                'Must model\ncorrelation', fontsize=6, 
+                ha='center', bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
+    
+    # Other annotations
+    ax2.text(0.88, 2.1, '2× penalty', fontsize=6, ha='center')
     
     ax2.set_xlabel('Effective ρ = σ_c²/(σ_c²+σ²)')
     ax2.set_ylabel('Performance Ratio')
     ax2.set_title('(b) Impact of Clock Correlation')
     ax2.legend(loc='upper left', fontsize=6)
     ax2.grid(True, alpha=0.3)
-    ax2.set_ylim([0.8, max(a_optimal_vs_ratio)*1.1])
+    ax2.set_ylim([0.8, max(max(mismodel_penalty), max(a_optimal_vs_ratio))*1.1])
     
     # Subplot 3: Signed correlation structure
     ax3 = axes[2]
@@ -772,8 +821,7 @@ def u4_correlated_noise():
     plt.close()
     
     print(f"✓ Saved: u4_correlated_noise.png/pdf")
-    print(f"✓ Removed redundant elements (gray bars, mismodel penalty)")
-    print(f"✓ Legend placement optimized")
+    print(f"✓ Added 'Must model correlation' annotation")
     
     return True
 
@@ -1449,10 +1497,12 @@ def create_regime_map():
 
 def create_ioo_parameter_surface():
     """
-    Create 3D parameter surface with better visualization.
+    Create IoO parameter analysis as TWO separate figures for clarity.
+    Figure 1: 3D surface with two viewing angles
+    Figure 2: 2D feasibility map with clear boundaries
     """
     print("\n" + "="*60)
-    print("Creating IoO Parameter Surface with Clear Boundaries")
+    print("Creating IoO Parameter Surface (Two Separate Figures)")
     print("="*60)
     
     # Parameter ranges
@@ -1463,15 +1513,16 @@ def create_ioo_parameter_surface():
     target_pos = np.array([7000e3, 0, 1000e3])
     rx_pos = np.array([7000e3, 0, 0])
     
-    # Relaxed feasibility thresholds
-    min_sinr_db = -30  # More permissive minimum SINR
-    max_variance_m2 = 5.0  # Allow larger variance
+    # Feasibility thresholds
+    min_sinr_db = -30  # Minimum usable SINR
+    max_variance_m2 = 5.0  # Maximum acceptable variance
     
     info_gain_matrix = np.zeros((len(bistatic_angles), len(processing_gains_db)))
-    feasibility_matrix = np.zeros((len(bistatic_angles), len(processing_gains_db)))
+    sinr_matrix = np.zeros((len(bistatic_angles), len(processing_gains_db)))
+    variance_matrix = np.zeros((len(bistatic_angles), len(processing_gains_db)))
     
     # Weaker prior for better visibility
-    J_prior = np.diag([1, 1, 0.01])  # Much weaker prior
+    J_prior = np.diag([1, 1, 0.01])
     
     for i, angle_deg in enumerate(bistatic_angles):
         for j, pg_db in enumerate(processing_gains_db):
@@ -1499,20 +1550,18 @@ def create_ioo_parameter_surface():
             
             sinr_ioo = calculate_sinr_ioo(radar_params, geometry)
             sinr_ioo_db = 10*np.log10(max(sinr_ioo, 1e-10))
+            sinr_matrix[i, j] = sinr_ioo_db
             
-            # Check feasibility
-            if sinr_ioo_db > min_sinr_db:
-                feasibility_matrix[i, j] = 1  # SINR feasible
-                
-                if sinr_ioo > 1e-6:
-                    variance_ioo = calculate_bistatic_measurement_variance(
-                        sinr_ioo, 1e-4, 300e9, 10e9
-                    )
-                    if variance_ioo < max_variance_m2:
-                        feasibility_matrix[i, j] = 2  # Fully feasible
-                else:
-                    variance_ioo = 10.0  # Large variance for low SINR
-                
+            if sinr_ioo > 1e-6:
+                variance_ioo = calculate_bistatic_measurement_variance(
+                    sinr_ioo, 1e-4, 300e9, 10e9
+                )
+            else:
+                variance_ioo = 10.0
+            
+            variance_matrix[i, j] = variance_ioo
+            
+            if sinr_ioo_db > min_sinr_db and variance_ioo < max_variance_m2:
                 J_ioo = calculate_j_ioo(geometry.gradient, variance_ioo)
                 J_post = J_prior + J_ioo
                 
@@ -1526,88 +1575,123 @@ def create_ioo_parameter_surface():
                     info_gain_db = 10 * (np.log10(det_prior) - np.log10(det_post))
                     info_gain_matrix[i, j] = min(info_gain_db, 50)
                 except:
-                    info_gain_matrix[i, j] = np.nan  # Use NaN for numerical issues
+                    info_gain_matrix[i, j] = np.nan
             else:
-                feasibility_matrix[i, j] = 0
-                info_gain_matrix[i, j] = np.nan  # Use NaN for infeasible regions
+                info_gain_matrix[i, j] = np.nan
     
-    # Create visualization
-    fig = plt.figure(figsize=(7, 3))
+    # ========== FIGURE 1: 3D Surface with Two Views ==========
+    fig1 = plt.figure(figsize=(8, 3.5))
     
-    # 3D surface plot with better viewing angle
-    ax = fig.add_subplot(121, projection='3d')
     X, Y = np.meshgrid(processing_gains_db, bistatic_angles)
-    
-    # Mask NaN values for surface plot
     Z = np.ma.masked_invalid(info_gain_matrix)
     
-    surf = ax.plot_surface(X, Y, Z, cmap='viridis',
-                           alpha=0.8, edgecolor='none')
+    # View 1: Standard perspective
+    ax1 = fig1.add_subplot(121, projection='3d')
+    surf1 = ax1.plot_surface(X, Y, Z, cmap='viridis',
+                             alpha=0.9, edgecolor='none', 
+                             vmin=0, vmax=50)
     
-    ax.set_xlabel('Processing Gain (dB)', fontsize=8)
-    ax.set_ylabel('Bistatic Angle (deg)', fontsize=8)
-    ax.set_zlabel('Info Gain (dB)', fontsize=8)
-    ax.set_title('(a) IoO Performance Surface', fontsize=9)
-    # Better viewing angle - more top-down view
-    ax.view_init(elev=30, azim=-45)
+    ax1.set_xlabel('Processing Gain (dB)', fontsize=8)
+    ax1.set_ylabel('Bistatic Angle (deg)', fontsize=8)
+    ax1.set_zlabel('Info Gain (dB)', fontsize=8)
+    ax1.set_title('(a) Standard View', fontsize=9)
+    ax1.view_init(elev=25, azim=45)
+    ax1.set_zlim([0, 50])
     
-    cbar = fig.colorbar(surf, ax=ax, shrink=0.5)
-    cbar.ax.tick_params(labelsize=6)
-    
-    # 2D contour plot with feasibility boundaries
-    ax2 = fig.add_subplot(122)
-    
-    # First draw background regions to ensure visibility
-    # Fill infeasible regions
-    infeasible_mask = feasibility_matrix == 0
-    if np.any(infeasible_mask):
-        ax2.contourf(processing_gains_db, bistatic_angles, 
-                     infeasible_mask.astype(float), 
-                     levels=[0.5, 1.5], colors=['lightgray'], alpha=0.5)
-    
-    # Plot info gain contours only in feasible regions
-    cs = ax2.contourf(processing_gains_db, bistatic_angles, 
-                      info_gain_matrix, levels=20, cmap='viridis',
-                      extend='both')
-    
-    # Only plot contours where data exists
-    valid_mask = ~np.isnan(info_gain_matrix)
-    if np.sum(valid_mask) > 10:
-        cs2 = ax2.contour(processing_gains_db, bistatic_angles, 
-                         info_gain_matrix, levels=[5, 10, 20, 30, 40],
-                         colors='white', linewidths=0.5, alpha=0.8)
-        ax2.clabel(cs2, inline=True, fontsize=6, fmt='%g dB')
-    
-    # Add feasibility boundaries with thicker lines
-    cs3 = ax2.contour(processing_gains_db, bistatic_angles,
-                      feasibility_matrix, levels=[0.5, 1.5],
-                      colors=['red', 'yellow'], linewidths=2.5)
-    
-    # Mark practical operating region with lighter shade
-    ax2.axhspan(60, 120, alpha=0.05, color='green')
-    ax2.axvspan(50, 80, alpha=0.05, color='green')
+    # View 2: Top-down perspective
+    ax2 = fig1.add_subplot(122, projection='3d')
+    surf2 = ax2.plot_surface(X, Y, Z, cmap='viridis',
+                             alpha=0.9, edgecolor='none',
+                             vmin=0, vmax=50)
     
     ax2.set_xlabel('Processing Gain (dB)', fontsize=8)
     ax2.set_ylabel('Bistatic Angle (deg)', fontsize=8)
-    ax2.set_title('(b) Feasible Operating Region', fontsize=9)
-    ax2.grid(True, alpha=0.3)
+    ax2.set_zlabel('Info Gain (dB)', fontsize=8)
+    ax2.set_title('(b) Top View', fontsize=9)
+    ax2.view_init(elev=70, azim=45)
+    ax2.set_zlim([0, 50])
     
-    # Enhanced legend moved to upper left
-    from matplotlib.patches import Patch
-    legend_elements = [
-        Patch(facecolor='lightgray', alpha=0.5, label=f'SINR < {min_sinr_db} dB'),
-        Patch(facecolor='yellow', alpha=0.3, label=f'σ² > {max_variance_m2} m²'),
-        Patch(facecolor='green', alpha=0.1, label='Practical region')
-    ]
-    ax2.legend(handles=legend_elements, loc='upper left', fontsize=6)
+    # Single colorbar for both
+    cbar1 = fig1.colorbar(surf1, ax=[ax1, ax2], shrink=0.6, aspect=10)
+    cbar1.set_label('Information Gain (dB)', fontsize=8)
+    cbar1.ax.tick_params(labelsize=7)
     
+    plt.suptitle('IoO Performance Surface', fontsize=10, y=1.02)
     plt.tight_layout()
-    plt.savefig(f'{args.output_dir}/ioo_parameter_surface.png', dpi=300, bbox_inches='tight')
-    plt.savefig(f'{args.output_dir}/ioo_parameter_surface.pdf', bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/ioo_surface_3d.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/ioo_surface_3d.pdf', bbox_inches='tight')
     plt.close()
     
-    print(f"✓ Saved: ioo_parameter_surface.png/pdf")
-    print(f"✓ Better 3D viewing angle and legend placement")
+    print(f"✓ Saved: ioo_surface_3d.png/pdf")
+    
+    # ========== FIGURE 2: 2D Feasibility Map ==========
+    fig2 = plt.figure(figsize=(5, 4))
+    ax = fig2.add_subplot(111)
+    
+    # Main heatmap (info gain)
+    im = ax.contourf(processing_gains_db, bistatic_angles, 
+                     info_gain_matrix, levels=20, cmap='viridis',
+                     extend='both')
+    
+    # Add contour lines for key values
+    cs = ax.contour(processing_gains_db, bistatic_angles, 
+                    info_gain_matrix, levels=[5, 10, 20, 30, 40],
+                    colors='white', linewidths=0.5, alpha=0.8)
+    ax.clabel(cs, inline=True, fontsize=6, fmt='%g dB')
+    
+    # SINR threshold boundary (red line)
+    sinr_boundary = ax.contour(processing_gains_db, bistatic_angles,
+                               sinr_matrix, levels=[min_sinr_db],
+                               colors='red', linewidths=2)
+    
+    # Variance threshold boundary (yellow line)
+    var_boundary = ax.contour(processing_gains_db, bistatic_angles,
+                             variance_matrix, levels=[max_variance_m2],
+                             colors='yellow', linewidths=2)
+    
+    # Practical operating region (subtle shading)
+    ax.axhspan(60, 120, alpha=0.1, color='green')
+    ax.axvspan(50, 80, alpha=0.1, color='green')
+    
+    # Add legend explaining boundaries
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], color='red', linewidth=2, 
+               label=f'SINR = {min_sinr_db} dB'),
+        Line2D([0], [0], color='yellow', linewidth=2, 
+               label=f'σ² = {max_variance_m2} m²'),
+        Line2D([0], [0], color='white', linewidth=1, 
+               label='Info gain contours'),
+    ]
+    
+    ax.legend(handles=legend_elements, loc='upper right', 
+             fontsize=7, framealpha=0.9)
+    
+    ax.set_xlabel('Processing Gain (dB)', fontsize=9)
+    ax.set_ylabel('Bistatic Angle (deg)', fontsize=9)
+    ax.set_title('Feasible Operating Region for IoO', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    
+    # Colorbar
+    cbar2 = plt.colorbar(im, ax=ax)
+    cbar2.set_label('Information Gain (dB)', fontsize=8)
+    cbar2.ax.tick_params(labelsize=7)
+    
+    # Add text annotation for practical region
+    ax.text(65, 90, 'Practical\nRegion', fontsize=8, 
+           ha='center', color='darkgreen', weight='bold',
+           bbox=dict(boxstyle='round', facecolor='white', 
+                    alpha=0.7, edgecolor='green'))
+    
+    plt.tight_layout()
+    plt.savefig(f'{args.output_dir}/ioo_feasibility_map.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{args.output_dir}/ioo_feasibility_map.pdf', bbox_inches='tight')
+    plt.close()
+    
+    print(f"✓ Saved: ioo_feasibility_map.png/pdf")
+    print(f"✓ Red line: SINR threshold ({min_sinr_db} dB)")
+    print(f"✓ Yellow line: Variance threshold ({max_variance_m2} m²)")
+    print(f"✓ White contours: Information gain levels")
     
     return True
 
