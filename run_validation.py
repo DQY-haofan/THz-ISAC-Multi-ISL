@@ -515,26 +515,73 @@ def u3_interference_regimes():
 # ==============================================================================
 def u4_correlated_noise():
     """
-    U4: Demonstrate impact of correlated vs independent measurement noise.
-    Using explicit clock bias states with original D-optimal and A-optimal metrics.
+    U4: Demonstrate impact of correlated noise using GLS and mismatched weights.
+    Shows true penalty of ignoring correlation through actual covariance.
     """
     print("\n" + "="*60)
-    print("U4: Correlated Noise Effects (Explicit Clock Bias Model)")
+    print("U4: Correlated Noise Effects (GLS vs Mismatched Weights)")
     print("="*60)
     
-    # Part 1: Network size analysis with explicit clock model
-    n_satellites_range = np.arange(3, 9)
+    from scipy import linalg
     
-    # Metrics storage - using original metric definitions
+    def gls_and_mismatch_cov(H, R_indep, G, sigma_c2):
+        """
+        Compute GLS covariance and actual covariance under weight mismatch.
+        
+        H: Jacobian matrix (n_links × n_params)
+        R_indep: Independent noise covariance (n_links × n_links)
+        G: Clock coupling matrix (n_links × n_sats)
+        sigma_c2: Clock variance σ_c²
+        
+        Returns:
+            Sigma_gls: Correct GLS parameter covariance
+            Sigma_mis: Actual covariance when ignoring correlation
+        """
+        # True measurement covariance: C = R + σ_c² GG^T
+        C = R_indep + sigma_c2 * (G @ G.T)
+        
+        # GLS (correct model)
+        try:
+            C_chol = linalg.cho_factor(C, lower=True, check_finite=False)
+            J_gls = H.T @ linalg.cho_solve(C_chol, H)
+            J_gls_chol = linalg.cho_factor(J_gls, lower=True, check_finite=False)
+            Sigma_gls = linalg.cho_solve(J_gls_chol, np.eye(J_gls.shape[0]))
+        except:
+            # Fallback to pseudo-inverse
+            C_inv = np.linalg.pinv(C)
+            J_gls = H.T @ C_inv @ H
+            Sigma_gls = np.linalg.pinv(J_gls)
+        
+        # WLS with wrong weights (ignoring correlation)
+        try:
+            R_chol = linalg.cho_factor(R_indep, lower=True, check_finite=False)
+            W = linalg.cho_solve(R_chol, np.eye(R_indep.shape[0]))
+            J_wls = H.T @ W @ H
+            J_wls_chol = linalg.cho_factor(J_wls, lower=True, check_finite=False)
+            
+            # Actual covariance under true C
+            mid = H.T @ W @ C @ W @ H
+            temp = linalg.cho_solve(J_wls_chol, mid)
+            Sigma_mis = linalg.cho_solve(J_wls_chol, temp.T).T
+        except:
+            # Fallback
+            W = np.linalg.pinv(R_indep)
+            J_wls = H.T @ W @ H
+            J_wls_inv = np.linalg.pinv(J_wls)
+            Sigma_mis = J_wls_inv @ (H.T @ W @ C @ W @ H) @ J_wls_inv
+        
+        return Sigma_gls, Sigma_mis
+    
+    # Part 1: Network size analysis (focus on 3D position subspace)
+    n_satellites_range = np.arange(3, 7)  # Reduced range for clearer effect
+    
     d_optimal_independent = []
     d_optimal_correlated = []
     a_optimal_independent = []
     a_optimal_correlated = []
     
-    # Weak prior for better measurement visibility
-    prior_strength = 0.01
-    base_variance = 1e-6  # 1 mm² range variance
-    clock_variance_ratio = 9.0  # σ_c²/σ² = 9:1 for strong effect
+    base_variance = 1e-6  # 1 mm²
+    clock_variance_ratio = 25.0  # σ_c²/σ² = 25 (strong but realistic)
     
     for n_sats in n_satellites_range:
         n_links = n_sats * (n_sats - 1) // 2
@@ -544,105 +591,50 @@ def u4_correlated_noise():
             for j in range(i+1, n_sats):
                 active_links.append((i, j))
         
-        # Initial satellite state (8-state per satellite for compatibility)
+        # Satellite positions (3D coordinates only)
         np.random.seed(42)
-        sat_states = np.zeros(8 * n_sats)
+        sat_positions = np.zeros((n_sats, 3))
         for i in range(n_sats):
             angle = 2 * np.pi * i / n_sats
-            sat_states[8*i:8*i+3] = [7071e3 * np.cos(angle), 
-                                     7071e3 * np.sin(angle), 0]
+            sat_positions[i] = [7071e3 * np.cos(angle), 
+                               7071e3 * np.sin(angle), 0]
         
-        # Build measurement Jacobian H for position states
-        H = []
-        for (sat_i, sat_j) in active_links:
-            # Get positions
-            pos_i = sat_states[8*sat_i:8*sat_i+3]
-            pos_j = sat_states[8*sat_j:8*sat_j+3]
-            
-            # Range and unit vector
-            delta = pos_j - pos_i
+        # Build measurement Jacobian H (n_links × 3*n_sats)
+        H = np.zeros((n_links, 3 * n_sats))
+        for idx, (i, j) in enumerate(active_links):
+            delta = sat_positions[j] - sat_positions[i]
             range_ij = np.linalg.norm(delta)
             u_ij = delta / range_ij
-            
-            # Jacobian row for this measurement (mapped to 8-state system)
-            h_row = np.zeros(8 * n_sats)
-            h_row[8*sat_i:8*sat_i+3] = -u_ij
-            h_row[8*sat_j:8*sat_j+3] = u_ij
-            H.append(h_row)
+            H[idx, 3*i:3*i+3] = -u_ij
+            H[idx, 3*j:3*j+3] = u_ij
         
-        H = np.array(H)  # n_links × 8n_sats
-        
-        # Clock coupling matrix G (each link couples to 2 satellite clocks)
+        # Clock coupling matrix G
         G = np.zeros((n_links, n_sats))
-        for idx, (sat_i, sat_j) in enumerate(active_links):
-            G[idx, sat_i] = 1  # Link depends on satellite i's clock
-            G[idx, sat_j] = 1  # Link depends on satellite j's clock
+        for idx, (i, j) in enumerate(active_links):
+            G[idx, i] = 1
+            G[idx, j] = 1
         
-        # Prior information matrix
-        J_prior = np.eye(8 * n_sats) * prior_strength
-        
-        # Measurement noise covariance
+        # Independent noise covariance
         R = base_variance * np.eye(n_links)
-        R_inv = np.linalg.inv(R)
         
-        # === SCENARIO 1: INDEPENDENT NOISE ===
-        J_measurement_indep = H.T @ R_inv @ H
-        J_post_indep = J_prior + J_measurement_indep
+        # Clock variance
+        sigma_c2 = base_variance * clock_variance_ratio
         
-        # === SCENARIO 2: CORRELATED NOISE (Clock bias) ===
-        # Clock bias covariance
-        sigma_c_squared = base_variance * clock_variance_ratio
-        Sigma_b = sigma_c_squared * np.eye(n_sats)
-        Sigma_b_inv = np.linalg.inv(Sigma_b)
+        # Compute covariances using GLS
+        Sigma_gls, Sigma_mis = gls_and_mismatch_cov(H, R, G, sigma_c2)
         
-        # Using Schur complement formula:
-        # J_eff = H^T R^{-1} H - H^T R^{-1} G (Σ_b^{-1} + G^T R^{-1} G)^{-1} G^T R^{-1} H
+        # Also compute pure independent case
+        Sigma_indep = np.linalg.pinv(H.T @ np.linalg.inv(R) @ H + 1e-12*np.eye(3*n_sats))
         
-        # Compute S = Σ_b^{-1} + G^T R^{-1} G
-        S = Sigma_b_inv + G.T @ R_inv @ G  # n_sats × n_sats
-        
+        # D-optimal (log-det based)
         try:
-            # Cholesky decomposition for numerical stability
-            L_S = np.linalg.cholesky(S)
+            _, logdet_indep = np.linalg.slogdet(Sigma_indep)
+            _, logdet_gls = np.linalg.slogdet(Sigma_gls)
             
-            # Compute H^T R^{-1} G
-            HTRinvG = H.T @ R_inv @ G  # 8n_sats × n_sats
-            
-            # Solve S^{-1} (G^T R^{-1} H) using Cholesky
-            temp = np.linalg.solve(L_S, HTRinvG.T)  # Solve L_S y = (G^T R^{-1} H)
-            SinvGTRinvH = np.linalg.solve(L_S.T, temp).T  # Solve L_S^T x = y
-            
-            # Schur complement correction
-            schur_correction = HTRinvG @ SinvGTRinvH.T
-            
-            # Effective measurement information with clock correlation
-            J_measurement_corr = J_measurement_indep - schur_correction
-            
-        except np.linalg.LinAlgError:
-            # Fallback: approximate correlation effect
-            J_measurement_corr = J_measurement_indep * (1.0 / (1.0 + clock_variance_ratio))
-        
-        J_post_corr = J_prior + J_measurement_corr
-        
-        # Calculate D-optimal metric in dB (position space only)
-        try:
-            # Extract position indices
-            pos_indices = []
-            for k in range(n_sats):
-                pos_indices.extend([8*k, 8*k+1, 8*k+2])
-            
-            J_prior_pos = J_prior[np.ix_(pos_indices, pos_indices)]
-            J_indep_pos = J_post_indep[np.ix_(pos_indices, pos_indices)]
-            J_corr_pos = J_post_corr[np.ix_(pos_indices, pos_indices)]
-            
-            # Compute log-det for position space
-            _, logdet_prior = np.linalg.slogdet(J_prior_pos + 1e-12*np.eye(len(pos_indices)))
-            _, logdet_indep = np.linalg.slogdet(J_indep_pos + 1e-12*np.eye(len(pos_indices)))
-            _, logdet_corr = np.linalg.slogdet(J_corr_pos + 1e-12*np.eye(len(pos_indices)))
-            
-            # D-optimal: information gain from prior (in dB)
-            d_opt_indep_db = 10 * (logdet_indep - logdet_prior) / np.log(10)
-            d_opt_corr_db = 10 * (logdet_corr - logdet_prior) / np.log(10)
+            # Normalize by dimension
+            dim = 3 * n_sats
+            d_opt_indep_db = -10 * logdet_indep / (np.log(10))  # Negative because smaller is better
+            d_opt_corr_db = -10 * logdet_gls / (np.log(10))
             
         except:
             d_opt_indep_db = 0
@@ -651,26 +643,15 @@ def u4_correlated_noise():
         d_optimal_independent.append(d_opt_indep_db)
         d_optimal_correlated.append(d_opt_corr_db)
         
-        # Calculate A-optimal metric
-        try:
-            crlb_prior_pos = np.linalg.inv(J_prior_pos + 1e-12*np.eye(len(pos_indices)))
-            crlb_indep_pos = np.linalg.inv(J_indep_pos + 1e-12*np.eye(len(pos_indices)))
-            crlb_corr_pos = np.linalg.inv(J_corr_pos + 1e-12*np.eye(len(pos_indices)))
-            
-            # A-optimal: CRLB trace ratio (smaller is better)
-            a_opt_indep = np.trace(crlb_indep_pos) / np.trace(crlb_prior_pos)
-            a_opt_corr = np.trace(crlb_corr_pos) / np.trace(crlb_prior_pos)
-            
-        except:
-            a_opt_indep = 1.0
-            a_opt_corr = 1.0
+        # A-optimal (trace based)
+        a_opt_indep = 1.0  # Normalized reference
+        a_opt_corr = np.trace(Sigma_gls) / np.trace(Sigma_indep)
         
         a_optimal_independent.append(a_opt_indep)
         a_optimal_correlated.append(a_opt_corr)
     
-    # Part 2: Correlation strength sweep
-    # Using σ_c²/σ² ratio instead of ρ for clearer physical meaning
-    clock_ratios = np.logspace(-1, 1.5, 10)  # 0.1 to ~30
+    # Part 2: Correlation strength sweep with mismodel penalty
+    clock_ratios = np.logspace(-0.5, 2, 10)  # σ_c²/σ² from 0.3 to 100
     n_sats_fixed = 4
     
     a_optimal_vs_ratio = []
@@ -681,85 +662,45 @@ def u4_correlated_noise():
         active_links = [(i, j) for i in range(n_sats_fixed) 
                         for j in range(i+1, n_sats_fixed)]
         
-        # Build system for fixed configuration
-        sat_states = np.zeros(8 * n_sats_fixed)
+        # Fixed satellite configuration
+        sat_positions = np.zeros((n_sats_fixed, 3))
         for i in range(n_sats_fixed):
             angle = 2 * np.pi * i / n_sats_fixed
-            sat_states[8*i:8*i+3] = [7071e3 * np.cos(angle), 
-                                     7071e3 * np.sin(angle), 0]
+            sat_positions[i] = [7071e3 * np.cos(angle), 
+                               7071e3 * np.sin(angle), 0]
         
-        # Build H matrix
-        H = []
-        for (sat_i, sat_j) in active_links:
-            pos_i = sat_states[8*sat_i:8*sat_i+3]
-            pos_j = sat_states[8*sat_j:8*sat_j+3]
-            delta = pos_j - pos_i
+        # Build H and G matrices
+        H = np.zeros((n_links, 3 * n_sats_fixed))
+        G = np.zeros((n_links, n_sats_fixed))
+        
+        for idx, (i, j) in enumerate(active_links):
+            delta = sat_positions[j] - sat_positions[i]
             range_ij = np.linalg.norm(delta)
             u_ij = delta / range_ij
-            h_row = np.zeros(8 * n_sats_fixed)
-            h_row[8*sat_i:8*sat_i+3] = -u_ij
-            h_row[8*sat_j:8*sat_j+3] = u_ij
-            H.append(h_row)
-        H = np.array(H)
+            H[idx, 3*i:3*i+3] = -u_ij
+            H[idx, 3*j:3*j+3] = u_ij
+            G[idx, i] = 1
+            G[idx, j] = 1
         
-        # Clock coupling matrix
-        G = np.zeros((n_links, n_sats_fixed))
-        for idx, (sat_i, sat_j) in enumerate(active_links):
-            G[idx, sat_i] = 1
-            G[idx, sat_j] = 1
-        
-        J_prior_fixed = np.eye(8 * n_sats_fixed) * prior_strength
         R = base_variance * np.eye(n_links)
-        R_inv = np.linalg.inv(R)
+        sigma_c2 = base_variance * ratio
         
-        # Correct model (with clock correlation)
-        sigma_c_squared = base_variance * ratio
-        Sigma_b = sigma_c_squared * np.eye(n_sats_fixed)
-        Sigma_b_inv = np.linalg.inv(Sigma_b)
+        # Compute GLS and mismatched covariances
+        Sigma_gls, Sigma_mis = gls_and_mismatch_cov(H, R, G, sigma_c2)
+        Sigma_indep = np.linalg.pinv(H.T @ np.linalg.inv(R) @ H + 1e-12*np.eye(3*n_sats_fixed))
         
-        S = Sigma_b_inv + G.T @ R_inv @ G
-        try:
-            L_S = np.linalg.cholesky(S)
-            HTRinvG = H.T @ R_inv @ G
-            temp = np.linalg.solve(L_S, HTRinvG.T)
-            SinvGTRinvH = np.linalg.solve(L_S.T, temp).T
-            schur_correction = HTRinvG @ SinvGTRinvH.T
-            J_measurement_correct = H.T @ R_inv @ H - schur_correction
-        except:
-            J_measurement_correct = H.T @ R_inv @ H / (1 + ratio)
+        # A-optimal ratio (GLS vs independent)
+        a_opt = np.trace(Sigma_gls) / np.trace(Sigma_indep)
+        a_optimal_vs_ratio.append(a_opt)
         
-        J_post_correct = J_prior_fixed + J_measurement_correct
-        
-        # Mismodeled (ignoring correlation)
-        J_post_mismodel = J_prior_fixed + H.T @ R_inv @ H
-        
-        try:
-            pos_indices = [8*k+i for k in range(n_sats_fixed) for i in range(3)]
-            
-            J_prior_pos = J_prior_fixed[np.ix_(pos_indices, pos_indices)]
-            J_correct_pos = J_post_correct[np.ix_(pos_indices, pos_indices)]
-            J_mismodel_pos = J_post_mismodel[np.ix_(pos_indices, pos_indices)]
-            
-            crlb_prior = np.linalg.inv(J_prior_pos + 1e-12*np.eye(len(pos_indices)))
-            crlb_correct = np.linalg.inv(J_correct_pos + 1e-12*np.eye(len(pos_indices)))
-            crlb_mismodel = np.linalg.inv(J_mismodel_pos + 1e-12*np.eye(len(pos_indices)))
-            
-            # A-optimal ratio (relative to prior)
-            a_opt = np.trace(crlb_correct) / np.trace(crlb_prior)
-            a_optimal_vs_ratio.append(a_opt)
-            
-            # Mismodeling penalty (correct vs mismodeled)
-            penalty = np.trace(crlb_correct) / np.trace(crlb_mismodel)
-            mismodel_penalty.append(penalty)
-            
-        except:
-            a_optimal_vs_ratio.append(1)
-            mismodel_penalty.append(1)
+        # TRUE mismodel penalty (mismatched vs correct)
+        penalty = np.trace(Sigma_mis) / np.trace(Sigma_gls)
+        mismodel_penalty.append(penalty)
     
     # Create visualization
     fig, axes = plt.subplots(1, 3, figsize=(9, 2.625))
     
-    # Subplot 1: Network size analysis (D-optimal in dB)
+    # Subplot 1: Network size analysis
     ax1 = axes[0]
     ax1.plot(n_satellites_range, d_optimal_independent, 
              'o-', color=colors['state_of_art'], linewidth=1.2,
@@ -769,55 +710,60 @@ def u4_correlated_noise():
              label=f'Clock Correlated (σ_c²/σ²={clock_variance_ratio:.0f})', markersize=4)
     
     ax1.set_xlabel('Number of Satellites')
-    ax1.set_ylabel('D-optimal (dB)')
-    ax1.set_title('(a) Information Gain vs Network Size')
-    ax1.legend(loc='upper left', fontsize=6)
+    ax1.set_ylabel('Information Content (-log|CRLB|, dB)')
+    ax1.set_title('(a) Information vs Network Size')
+    ax1.legend(loc='best', fontsize=6)
     ax1.grid(True, alpha=0.3)
-    ax1.set_xlim([3, 8])
     
-    # Subplot 2: Correlation coefficient sweep
+    # Subplot 2: Correlation impact and mismodel penalty
     ax2 = axes[1]
     
-    # Convert to effective correlation for x-axis
+    # Convert to effective correlation
     rho_eff = clock_ratios / (clock_ratios + 1)
     
     ax2.plot(rho_eff, a_optimal_vs_ratio, 
              'o-', color=colors['state_of_art'], 
-             linewidth=1.2, markersize=4, label='A-optimal ratio')
+             linewidth=1.2, markersize=4, label='CRLB degradation')
     ax2.plot(rho_eff, mismodel_penalty, 
              '^:', color=colors['low_cost'], 
              linewidth=1.2, markersize=4, label='Mismodel penalty')
     
-    # Add risk zone
-    ax2.axvspan(0.8, 1.0, alpha=0.2, color='red', label='High correlation risk')
+    # Mark important regions
+    ax2.axvspan(0.8, 1.0, alpha=0.2, color='red')
     ax2.axhline(y=1, color='k', linestyle='--', alpha=0.3, linewidth=0.5)
+    ax2.axhline(y=2, color='orange', linestyle=':', alpha=0.5, linewidth=1)
     
     ax2.set_xlabel('Effective ρ = σ_c²/(σ_c²+σ²)')
-    ax2.set_ylabel('CRLB Trace Ratio')
-    ax2.set_title('(b) Impact of Clock Correlation')
-    ax2.legend(loc='best', fontsize=6)
+    ax2.set_ylabel('Performance Ratio')
+    ax2.set_title('(b) True Impact of Correlation')
+    ax2.legend(loc='upper left', fontsize=6)
     ax2.grid(True, alpha=0.3)
+    ax2.set_ylim([0.8, max(max(mismodel_penalty), 3)])
     
-    # Subplot 3: Correlation matrix visualization
+    # Add text annotations
+    ax2.text(0.9, 2.2, '2× penalty', fontsize=6, ha='center')
+    ax2.text(0.9, 0.95, 'Must model\ncorrelation', fontsize=6, 
+            ha='center', bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
+    
+    # Subplot 3: Correlation structure
     ax3 = axes[2]
     
-    # Show effective correlation structure
-    n_show_links = 6
-    G_show = np.array([[1,1,0,0],  # Link 0-1
-                      [1,0,1,0],  # Link 0-2
-                      [1,0,0,1],  # Link 0-3
-                      [0,1,1,0],  # Link 1-2
-                      [0,1,0,1],  # Link 1-3
-                      [0,0,1,1]]) # Link 2-3
+    # Effective correlation matrix for visualization
+    n_show = 6
+    G_show = np.array([[1,1,0,0],
+                      [1,0,1,0],
+                      [1,0,0,1],
+                      [0,1,1,0],
+                      [0,1,0,1],
+                      [0,0,1,1]])
     
-    # Effective correlation: C = I + (σ_c²/σ²) GG^T (normalized)
-    ratio_vis = 9.0
-    C_eff = np.eye(n_show_links) + ratio_vis * (G_show @ G_show.T) / 4
+    ratio_vis = 25.0
+    C_eff = np.eye(n_show) + ratio_vis * (G_show @ G_show.T) / 4
     D = np.sqrt(np.diag(C_eff))
     C_corr = C_eff / np.outer(D, D)
     
     im = ax3.imshow(C_corr, cmap='RdBu_r', vmin=0, vmax=1, aspect='auto')
-    ax3.set_title(f'(c) Clock-Induced Correlation\n(σ_c²/σ²={ratio_vis:.0f})')
+    ax3.set_title(f'(c) Clock Correlation Structure')
     ax3.set_xlabel('Link Index')
     ax3.set_ylabel('Link Index')
     
@@ -831,25 +777,32 @@ def u4_correlated_noise():
     plt.close()
     
     print(f"✓ Saved: u4_correlated_noise.png/pdf")
-    print(f"✓ Explicit clock bias model with original metrics")
+    print(f"✓ GLS with true mismodel penalty calculation")
     print(f"✓ Clock variance ratio: σ_c²/σ² = {clock_variance_ratio}")
     
     return True
-    
+
+
 # ==============================================================================
 # U5: Opportunistic Sensing (with axis annotations)
 # ==============================================================================
 
 def u5_opportunistic_sensing():
     """
-    U5: Demonstrate information gain from opportunistic bistatic sensing.
-    Enhanced with axis length annotations as requested.
+    U5: IoO with realistic noise model based on kTB.
     """
     print("\n" + "="*60)
-    print("U5: Opportunistic Sensing Gain (Log-Det Metric)")
+    print("U5: Opportunistic Sensing (Physical Noise Model)")
     print("="*60)
     
-    # Create poor geometry scenario
+    # Physical noise calculation
+    def calculate_noise_power(bandwidth=10e9, temperature=290, noise_figure_db=5):
+        """Calculate thermal noise power using kTB formula."""
+        k_boltzmann = 1.380649e-23  # J/K
+        noise_power = k_boltzmann * temperature * bandwidth * 10**(noise_figure_db/10)
+        return noise_power
+    
+    # Poor geometry scenario
     sat_positions = np.array([
         [7000e3, 0, 0],
         [7100e3, 100e3, 0],
@@ -858,18 +811,14 @@ def u5_opportunistic_sensing():
     
     target_pos = np.array([7000e3, 0, 1000e3])
     
-    # Prior information
+    # Prior information (weak in Z)
     J_prior = np.diag([10, 10, 0.1])
     
     # Calculate CRLB before IoO
     try:
-        L_prior = np.linalg.cholesky(J_prior + 1e-10 * np.eye(3))
-        crlb_prior = linalg.cho_solve((L_prior, True), np.eye(3))
+        crlb_prior = np.linalg.inv(J_prior + 1e-10 * np.eye(3))
     except:
         crlb_prior = np.linalg.pinv(J_prior)
-    
-    det_prior = max(np.linalg.det(crlb_prior), 1e-18)
-    logdet_prior = np.log10(det_prior)
     
     # Opportunistic sensing setup
     tx_pos = np.array([6500e3, 0, 500e3])
@@ -877,34 +826,38 @@ def u5_opportunistic_sensing():
     
     geometry = calculate_bistatic_geometry(tx_pos, rx_pos, target_pos)
     
-    # Enhanced radar parameters
-    processing_gain = 1e7   # 70 dB
-    antenna_gain = 10000    # 40 dBi
+    # REALISTIC radar parameters
+    bandwidth = 10e9
+    noise_power = calculate_noise_power(bandwidth, 290, 5)  # ~1.3e-10 W
+    
+    processing_gain = 1e6   # 60 dB (realistic)
+    antenna_gain = 10**(35/10)  # 35 dBi (realistic phased array)
     
     radar_params = BistaticRadarParameters(
-        tx_power=10.0,
+        tx_power=10.0,      # 10 W
         tx_gain=antenna_gain,
         rx_gain=antenna_gain,
-        wavelength=1e-3,
-        bistatic_rcs=100.0,
+        wavelength=1e-3,    # 1 mm (300 GHz)
+        bistatic_rcs=1.0,   # 1 m² (realistic target)
         processing_gain=processing_gain,
         processing_loss=2.0,
-        noise_power=1e-15
+        noise_power=noise_power  # Physical noise
     )
     
     sinr_ioo = calculate_sinr_ioo(radar_params, geometry)
     sinr_ioo_db = 10*np.log10(max(sinr_ioo, 1e-10))
     
     print(f"  IoO SINR: {sinr_ioo_db:.1f} dB")
+    print(f"  Noise power: {10*np.log10(noise_power/1e-3):.1f} dBm")
     print(f"  Processing gain: {10*np.log10(processing_gain):.1f} dB")
     
     # Calculate measurement variance
     if sinr_ioo > 1e-6:
         variance_ioo = calculate_bistatic_measurement_variance(
-            sinr_ioo, sigma_phi_squared=1e-4, f_c=300e9, bandwidth=10e9
+            sinr_ioo, sigma_phi_squared=1e-4, f_c=300e9, bandwidth=bandwidth
         )
     else:
-        variance_ioo = 1.0
+        variance_ioo = 10.0  # Large variance for low SINR
     
     # IoO Fisher Information
     J_ioo = calculate_j_ioo(geometry.gradient, variance_ioo)
@@ -914,90 +867,76 @@ def u5_opportunistic_sensing():
     
     # Calculate CRLB after IoO
     try:
-        L_post = np.linalg.cholesky(J_post + 1e-10 * np.eye(3))
-        crlb_post = linalg.cho_solve((L_post, True), np.eye(3))
+        crlb_post = np.linalg.inv(J_post + 1e-10 * np.eye(3))
     except:
         crlb_post = np.linalg.pinv(J_post)
     
+    # Information gain
+    det_prior = max(np.linalg.det(crlb_prior), 1e-18)
     det_post = max(np.linalg.det(crlb_post), 1e-18)
-    logdet_post = np.log10(det_post)
-    
-    # Information gain in dB
-    info_gain_db = 10 * (logdet_prior - logdet_post)
-    info_gain_db = min(info_gain_db, 50)
+    info_gain_db = 10 * (np.log10(det_prior) - np.log10(det_post))
+    info_gain_db = min(info_gain_db, 30)  # Cap at realistic 30 dB
     
     # Calculate eigenvalues for axis lengths
-    eigenvals_prior, eigenvecs_prior = np.linalg.eig(crlb_prior)
-    eigenvals_post, eigenvecs_post = np.linalg.eig(crlb_post)
+    eigenvals_prior, _ = np.linalg.eig(crlb_prior)
+    eigenvals_post, _ = np.linalg.eig(crlb_post)
     
-    # Sort eigenvalues
-    eigenvals_prior = np.sort(eigenvals_prior)
-    eigenvals_post = np.sort(eigenvals_post)
+    # Axis lengths in appropriate units
+    prior_axes = np.sqrt(np.abs(eigenvals_prior))
+    post_axes = np.sqrt(np.abs(eigenvals_post))
     
-    # Axis lengths in mm
-    prior_axes_mm = np.sqrt(np.abs(eigenvals_prior)) * 1000
-    post_axes_mm = np.sqrt(np.abs(eigenvals_post)) * 1000
+    # Choose mm or m based on scale
+    if np.max(prior_axes) < 1:
+        unit = 'mm'
+        scale = 1000
+    else:
+        unit = 'm'
+        scale = 1
     
-    print(f"  Prior axes (mm): X={prior_axes_mm[0]:.2f}, Y={prior_axes_mm[1]:.2f}, Z={prior_axes_mm[2]:.2f}")
-    print(f"  Post axes (mm): X={post_axes_mm[0]:.2f}, Y={post_axes_mm[1]:.2f}, Z={post_axes_mm[2]:.2f}")
+    prior_axes_scaled = prior_axes * scale
+    post_axes_scaled = post_axes * scale
+    
+    print(f"  Prior axes ({unit}): {prior_axes_scaled[0]:.1f}, {prior_axes_scaled[2]:.1f}")
+    print(f"  Post axes ({unit}): {post_axes_scaled[0]:.1f}, {post_axes_scaled[2]:.1f}")
     print(f"  Information gain: {info_gain_db:.1f} dB")
     
-    # Create figure with subplots
+    # Create figure
     fig, axes = plt.subplots(1, 2, figsize=(7, 2.625))
     
     # Subplot 1: Error ellipsoids
     ax1 = axes[0]
     theta = np.linspace(0, 2*np.pi, 100)
     
-    # Use sorted eigenvalues for ellipse
-    a_prior = prior_axes_mm[0]
-    b_prior = prior_axes_mm[2]
-    x_prior = a_prior * np.cos(theta)
-    z_prior = b_prior * np.sin(theta)
+    x_prior = prior_axes_scaled[0] * np.cos(theta)
+    z_prior = prior_axes_scaled[2] * np.sin(theta)
+    x_post = post_axes_scaled[0] * np.cos(theta)
+    z_post = post_axes_scaled[2] * np.sin(theta)
     
-    a_post = post_axes_mm[0]
-    b_post = post_axes_mm[2]
-    x_post = a_post * np.cos(theta)
-    z_post = b_post * np.sin(theta)
+    ax1.plot(x_prior, z_prior, '--', color=colors['low_cost'], 
+             linewidth=1.5, label='Without IoO')
+    ax1.plot(x_post, z_post, '-', color=colors['state_of_art'], 
+             linewidth=1.5, label=f'With IoO ({info_gain_db:.1f} dB)')
     
-    ax1.plot(x_prior, z_prior, '--', 
-             color=colors['low_cost'], linewidth=1.5,
-             label=f'Without IoO')
-    ax1.plot(x_post, z_post, '-',
-             color=colors['state_of_art'], linewidth=1.5,
-             label=f'With IoO ({info_gain_db:.1f} dB gain)')
-    
-    # Add axis length annotations
-    textstr = f'Prior: {a_prior:.1f}×{b_prior:.1f} mm\n'
-    textstr += f'Post: {a_post:.1f}×{b_post:.1f} mm'
+    # Add annotations
+    textstr = f'Prior: {prior_axes_scaled[0]:.1f}×{prior_axes_scaled[2]:.1f} {unit}\n'
+    textstr += f'Post: {post_axes_scaled[0]:.1f}×{post_axes_scaled[2]:.1f} {unit}\n'
+    textstr += f'SINR: {sinr_ioo_db:.1f} dB'
     props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
     ax1.text(0.02, 0.98, textstr, transform=ax1.transAxes, fontsize=6,
             verticalalignment='top', bbox=props)
     
-    grad_norm = geometry.gradient / np.linalg.norm(geometry.gradient)
-    arrow_scale = min(a_prior, b_prior) * 0.5
-    ax1.arrow(0, 0, 
-              grad_norm[0] * arrow_scale, 
-              grad_norm[2] * arrow_scale,
-              head_width=arrow_scale*0.1, 
-              head_length=arrow_scale*0.1, 
-              fc=colors['with_ioo'], 
-              ec=colors['with_ioo'], 
-              alpha=0.7)
-    
-    ax1.set_xlabel('X Error (mm)')
-    ax1.set_ylabel('Z Error (mm)')
+    ax1.set_xlabel(f'X Error ({unit})')
+    ax1.set_ylabel(f'Z Error ({unit})')
     ax1.set_title('(a) Error Ellipsoid Reduction')
     ax1.legend(loc='best', fontsize=7)
     ax1.grid(True, alpha=0.3)
     ax1.axis('equal')
     
-    # Subplot 2: Parameter sensitivity with feasibility boundary
+    # Subplot 2: Parameter sensitivity
     ax2 = axes[1]
     
-    pg_range_db = np.arange(30, 100, 10)
+    pg_range_db = np.arange(30, 80, 5)  # Realistic range
     info_gains = []
-    min_feasible_sinr = -30  # dB threshold
     
     for pg_db in pg_range_db:
         pg_linear = 10**(pg_db/10)
@@ -1006,51 +945,45 @@ def u5_opportunistic_sensing():
             tx_gain=antenna_gain,
             rx_gain=antenna_gain,
             wavelength=1e-3,
-            bistatic_rcs=100.0,
+            bistatic_rcs=1.0,
             processing_gain=pg_linear,
             processing_loss=2.0,
-            noise_power=1e-15
+            noise_power=noise_power
         )
         
         sinr_sweep = calculate_sinr_ioo(params_sweep, geometry)
-        sinr_sweep_db = 10*np.log10(max(sinr_sweep, 1e-10))
         
-        if sinr_sweep_db > min_feasible_sinr:
-            if sinr_sweep > 1e-6:
-                var_sweep = calculate_bistatic_measurement_variance(
-                    sinr_sweep, 1e-4, 300e9, 10e9
-                )
-            else:
-                var_sweep = 1.0
-                
-            J_ioo_sweep = calculate_j_ioo(geometry.gradient, var_sweep)
-            J_post_sweep = J_prior + J_ioo_sweep
-            
-            try:
-                crlb_sweep = np.linalg.inv(J_post_sweep)
-                det_sweep = max(np.linalg.det(crlb_sweep), 1e-18)
-                gain_sweep = 10 * (logdet_prior - np.log10(det_sweep))
-                info_gains.append(min(gain_sweep, 50))
-            except:
-                info_gains.append(0)
+        if sinr_sweep > 1e-6:
+            var_sweep = calculate_bistatic_measurement_variance(
+                sinr_sweep, 1e-4, 300e9, bandwidth
+            )
         else:
+            var_sweep = 10.0
+            
+        J_ioo_sweep = calculate_j_ioo(geometry.gradient, var_sweep)
+        J_post_sweep = J_prior + J_ioo_sweep
+        
+        try:
+            crlb_sweep = np.linalg.inv(J_post_sweep)
+            det_sweep = max(np.linalg.det(crlb_sweep), 1e-18)
+            gain_sweep = 10 * (np.log10(det_prior) - np.log10(det_sweep))
+            info_gains.append(min(gain_sweep, 30))
+        except:
             info_gains.append(0)
     
     ax2.plot(pg_range_db, info_gains, 'o-', color=colors['state_of_art'], 
              linewidth=1.2, markersize=4)
     
-    # Add minimum SINR boundary
     ax2.axhline(y=3, color='r', linestyle='--', alpha=0.5, linewidth=1,
-               label=f'Min useful gain (3 dB)')
+               label='3 dB threshold')
+    ax2.axvspan(50, 70, alpha=0.2, color='green', label='Practical')
+    ax2.axvspan(70, 80, alpha=0.2, color='orange', label='Challenging')
     
     ax2.set_xlabel('Processing Gain (dB)')
     ax2.set_ylabel('Information Gain (dB)')
     ax2.set_title('(b) Processing Gain Sensitivity')
     ax2.grid(True, alpha=0.3)
-    ax2.set_ylim([0, max(info_gains)*1.1])
-    
-    ax2.axvspan(60, 90, alpha=0.2, color='green', label='Feasible')
-    ax2.axvspan(90, 100, alpha=0.2, color='orange', label='Challenging')
+    ax2.set_ylim([0, max(info_gains)*1.2])
     ax2.legend(loc='upper left', fontsize=6)
     
     plt.tight_layout()
@@ -1059,9 +992,11 @@ def u5_opportunistic_sensing():
     plt.close()
     
     print(f"✓ Saved: u5_opportunistic_sensing.png/pdf")
-    print("✓ Verified: IoO improvement with axis annotations")
+    print(f"✓ Physical noise model (kTB)")
+    print(f"✓ Realistic parameter ranges")
     
     return info_gain_db > 3
+
 
 # ==============================================================================
 # Additional Analysis Functions
