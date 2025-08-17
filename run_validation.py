@@ -179,13 +179,13 @@ def setup_ieee_style():
 def u0_classical_baseline():
     """
     U0: Validate framework against classical TOA positioning CRLB.
-    All impairments disabled to verify fundamental correctness.
+    Enhanced with relative error annotation.
     """
     print("\n" + "="*60)
     print("U0: Classical Baseline Validation")
     print("="*60)
     
-    # Create static 4-satellite constellation (positions in meters)
+    # Create static 4-satellite constellation
     positions_m = np.array([
         [7.5e6, 0, 0],
         [0, 7.5e6, 0],
@@ -197,9 +197,6 @@ def u0_classical_baseline():
     snr_db_range = np.arange(0, 35, 2)
     crlb_ideal = []
     crlb_classical = []
-    
-    # Data storage for CSV
-    data_to_save = {'snr_db': snr_db_range.tolist()}
     
     for snr_db in snr_db_range:
         snr_linear = 10**(snr_db/10)
@@ -217,21 +214,22 @@ def u0_classical_baseline():
             f_c=300e9, bandwidth=10e9
         )
         
-        # Convert to position RMSE (simplified for 4-sat geometry)
-        gdop_factor = 1.5  # Typical GDOP for good geometry
+        # Convert to position RMSE
+        gdop_factor = 1.5
         pos_rmse = gdop_factor * np.sqrt(range_var_m2)
         crlb_ideal.append(pos_rmse)
         
-        # Classical TOA CRLB (theoretical)
+        # Classical TOA CRLB
         c = SPEED_OF_LIGHT
         beta_rms = 10e9 / np.sqrt(12)
         classical_var = c**2 / (8 * np.pi**2 * beta_rms**2 * snr_linear)
         classical_rmse = gdop_factor * np.sqrt(classical_var)
         crlb_classical.append(classical_rmse)
     
-    # Store data
-    data_to_save['framework_rmse_m'] = crlb_ideal
-    data_to_save['classical_rmse_m'] = crlb_classical
+    # Calculate relative error
+    relative_errors = np.abs(np.array(crlb_ideal) - np.array(crlb_classical)) / np.array(crlb_classical)
+    mean_relative_error = np.mean(relative_errors) * 100
+    max_relative_error = np.max(relative_errors) * 100
     
     # Plot comparison
     plt.figure(figsize=(3.5, 2.625))
@@ -250,19 +248,27 @@ def u0_classical_baseline():
     plt.xlim([0, 34])
     plt.ylim([0.1, 1000])
     
+    # Add validation metrics as text
+    textstr = f'Validation Metrics:\n'
+    textstr += f'Mean rel. error: {mean_relative_error:.2f}%\n'
+    textstr += f'Max rel. error: {max_relative_error:.2f}%\n'
+    textstr += f'✓ Framework validated' if mean_relative_error < 5 else '⚠ Check framework'
+    props = dict(boxstyle='round', facecolor='lightgreen' if mean_relative_error < 5 else 'yellow', 
+                alpha=0.5)
+    plt.text(0.02, 0.02, textstr, transform=plt.gca().transAxes, fontsize=6,
+            verticalalignment='bottom', bbox=props)
+    
     plt.tight_layout()
     plt.savefig(f'{args.output_dir}/u0_classical_baseline.png', dpi=300, bbox_inches='tight')
     plt.savefig(f'{args.output_dir}/u0_classical_baseline.pdf', bbox_inches='tight')
     plt.close()
     
-    # Verify agreement
-    relative_error = np.mean(np.abs(np.array(crlb_ideal) - np.array(crlb_classical)) 
-                            / np.array(crlb_classical))
-    print(f"Average relative error vs classical: {relative_error*100:.2f}%")
+    print(f"Average relative error vs classical: {mean_relative_error:.2f}%")
     print(f"✓ Saved: u0_classical_baseline.png/pdf")
+    print(f"✓ Validation metrics displayed on figure")
     
-    return relative_error < 0.05  # Pass if < 5% error
-
+    return mean_relative_error < 5  # Pass if < 5% error
+    
 # ==============================================================================
 # U1: Hardware Ceiling Validation
 # ==============================================================================
@@ -511,13 +517,13 @@ def u3_interference_regimes():
 def u4_correlated_noise():
     """
     U4: Demonstrate impact of correlated vs independent measurement noise.
-    Fixed to use position-only D-optimal metric and stronger correlation effects.
+    Enhanced with rank-1 clock drift model for stronger correlation effects.
     """
     print("\n" + "="*60)
-    print("U4: Correlated Noise Effects (Position-Space Metrics)")
+    print("U4: Correlated Noise Effects (Rank-1 Clock Model)")
     print("="*60)
     
-    # Part 1: Network size analysis
+    # Part 1: Network size analysis with strong correlation
     n_satellites_range = np.arange(3, 9)
     
     # Metrics storage
@@ -526,8 +532,8 @@ def u4_correlated_noise():
     a_optimal_independent = []
     a_optimal_correlated = []
     
-    # Much weaker prior for better visibility
-    prior_strength = 0.01  # Very weak prior
+    # Very weak prior to emphasize measurement contribution
+    prior_strength = 0.001
     base_variance = 1e-6  # 1 mm² range variance
     
     for n_sats in n_satellites_range:
@@ -558,20 +564,22 @@ def u4_correlated_noise():
             range_variance_list, z_list, correlated_noise=False
         )
         
-        # Scenario 2: Strongly correlated noise (full correlation for shared nodes)
-        C_n = np.eye(n_links) * base_variance
-        correlation_coeff = 0.7  # Stronger correlation
+        # Scenario 2: Rank-1 clock drift correlation
+        # C = σ²I + σ_c²AA^T where A encodes shared clocks
+        A = np.zeros((n_links, n_sats))
+        for idx, (i, j) in enumerate(active_links):
+            A[idx, i] = 1  # Link depends on satellite i's clock
+            A[idx, j] = 1  # Link depends on satellite j's clock
         
-        # Create strong block correlation for shared satellites
-        for i in range(n_links):
-            for j in range(i+1, n_links):
-                link_i = active_links[i]
-                link_j = active_links[j]
-                # Links that share ANY satellite are correlated
-                if (link_i[0] == link_j[0] or link_i[0] == link_j[1] or 
-                    link_i[1] == link_j[0] or link_i[1] == link_j[1]):
-                    C_n[i, j] = correlation_coeff * base_variance
-                    C_n[j, i] = correlation_coeff * base_variance
+        # Normalize and scale
+        clock_variance_ratio = 0.8  # 80% of noise from shared clock
+        C_n = base_variance * np.eye(n_links)
+        C_n += base_variance * clock_variance_ratio * (A @ A.T) / n_sats
+        
+        # Ensure positive definite
+        eigenvals = np.linalg.eigvalsh(C_n)
+        if np.min(eigenvals) < 1e-10:
+            C_n += 1e-10 * np.eye(n_links)
         
         J_post_corr, _ = update_info(
             J_prior, y_prior, active_links, sat_states,
@@ -579,9 +587,8 @@ def u4_correlated_noise():
             correlation_matrix=C_n
         )
         
-        # Calculate D-optimal metric in dB (POSITION SPACE ONLY)
+        # Calculate D-optimal metric in dB (position space)
         try:
-            # Extract position-only submatrices
             pos_indices = []
             for k in range(n_sats):
                 pos_indices.extend([8*k, 8*k+1, 8*k+2])
@@ -590,12 +597,10 @@ def u4_correlated_noise():
             J_indep_pos = J_post_indep[np.ix_(pos_indices, pos_indices)]
             J_corr_pos = J_post_corr[np.ix_(pos_indices, pos_indices)]
             
-            # Compute log-det for position space only
-            _, logdet_prior = np.linalg.slogdet(J_prior_pos)
-            _, logdet_indep = np.linalg.slogdet(J_indep_pos)
-            _, logdet_corr = np.linalg.slogdet(J_corr_pos)
+            _, logdet_prior = np.linalg.slogdet(J_prior_pos + 1e-10*np.eye(len(pos_indices)))
+            _, logdet_indep = np.linalg.slogdet(J_indep_pos + 1e-10*np.eye(len(pos_indices)))
+            _, logdet_corr = np.linalg.slogdet(J_corr_pos + 1e-10*np.eye(len(pos_indices)))
             
-            # Convert to dB scale
             d_opt_indep_db = 10 * (logdet_indep - logdet_prior) / np.log(10)
             d_opt_corr_db = 10 * (logdet_corr - logdet_prior) / np.log(10)
             
@@ -612,7 +617,6 @@ def u4_correlated_noise():
             crlb_indep_pos = np.linalg.inv(J_indep_pos + 1e-10 * np.eye(len(pos_indices)))
             crlb_corr_pos = np.linalg.inv(J_corr_pos + 1e-10 * np.eye(len(pos_indices)))
             
-            # A-optimal: improvement ratio (should be < 1 for improvement)
             a_opt_indep = np.trace(crlb_indep_pos) / np.trace(crlb_prior_pos)
             a_opt_corr = np.trace(crlb_corr_pos) / np.trace(crlb_prior_pos)
             
@@ -623,8 +627,8 @@ def u4_correlated_noise():
         a_optimal_independent.append(a_opt_indep)
         a_optimal_correlated.append(a_opt_corr)
     
-    # Part 2: Correlation coefficient sweep with stronger effects
-    rho_range = np.linspace(0, 0.9, 10)
+    # Part 2: Correlation coefficient sweep with variance normalization
+    rho_range = np.linspace(0, 0.95, 10)  # Include very high correlation
     n_sats_fixed = 4
     
     a_optimal_vs_rho = []
@@ -641,23 +645,27 @@ def u4_correlated_noise():
             sat_states[8*i:8*i+3] = [7071e3 * np.cos(angle), 
                                      7071e3 * np.sin(angle), 0]
         
-        # Full correlation matrix with strong structure
-        C_n = np.eye(n_links) * base_variance
-        for i in range(n_links):
-            for j in range(i+1, n_links):
-                link_i = active_links[i]
-                link_j = active_links[j]
-                # Strong correlation for shared satellites
-                if (link_i[0] == link_j[0] or link_i[0] == link_j[1] or 
-                    link_i[1] == link_j[0] or link_i[1] == link_j[1]):
-                    C_n[i, j] = rho * base_variance
-                    C_n[j, i] = rho * base_variance
+        # Rank-1 correlation with varying strength
+        A = np.zeros((n_links, n_sats_fixed))
+        for idx, (i, j) in enumerate(active_links):
+            A[idx, i] = 1
+            A[idx, j] = 1
+        
+        # Variance-preserving correlation matrix
+        # Keep marginal variance constant while changing correlation
+        C_n = base_variance * ((1 - rho) * np.eye(n_links) + 
+                               rho * (A @ A.T) / np.max(np.diag(A @ A.T)))
+        
+        # Ensure positive definite
+        eigenvals = np.linalg.eigvalsh(C_n)
+        if np.min(eigenvals) < 1e-10:
+            C_n += 1e-10 * np.eye(n_links)
         
         J_prior_fixed = np.eye(8 * n_sats_fixed) * prior_strength
         y_prior_fixed = np.zeros((8 * n_sats_fixed, 1))
         z_list_fixed = np.random.randn(n_links) * 1e-9
         
-        # Correct model (with correlation)
+        # Correct model
         J_post_correct, _ = update_info(
             J_prior_fixed, y_prior_fixed, 
             active_links, sat_states,
@@ -684,11 +692,9 @@ def u4_correlated_noise():
             crlb_correct = np.linalg.inv(J_correct_pos + 1e-10 * np.eye(len(pos_indices)))
             crlb_mismodel = np.linalg.inv(J_mismodel_pos + 1e-10 * np.eye(len(pos_indices)))
             
-            # A-optimal: trace ratio (smaller is better)
             a_opt = np.trace(crlb_correct) / np.trace(crlb_prior)
             a_optimal_vs_rho.append(a_opt)
             
-            # Mismodeling penalty (>1 means degradation)
             penalty = np.trace(crlb_mismodel) / np.trace(crlb_correct)
             mismodel_penalty.append(penalty)
             
@@ -699,14 +705,14 @@ def u4_correlated_noise():
     # Create visualization
     fig, axes = plt.subplots(1, 3, figsize=(9, 2.625))
     
-    # Subplot 1: Network size analysis (D-optimal in dB)
+    # Subplot 1: Network size analysis
     ax1 = axes[0]
     ax1.plot(n_satellites_range, d_optimal_independent, 
              'o-', color=colors['state_of_art'], linewidth=1.2,
              label='Independent', markersize=4)
     ax1.plot(n_satellites_range, d_optimal_correlated,
              's--', color=colors['high_performance'], linewidth=1.2,
-             label=f'Correlated (ρ=0.7)', markersize=4)
+             label='Rank-1 Clock Model', markersize=4)
     
     ax1.set_xlabel('Number of Satellites')
     ax1.set_ylabel('D-optimal (dB)')
@@ -714,7 +720,6 @@ def u4_correlated_noise():
     ax1.legend(loc='upper left', fontsize=7)
     ax1.grid(True, alpha=0.3)
     ax1.set_xlim([3, 8])
-    ax1.set_ylim([0, max(max(d_optimal_independent), max(d_optimal_correlated))*1.1])
     
     # Subplot 2: Correlation coefficient sweep
     ax2 = axes[1]
@@ -725,32 +730,33 @@ def u4_correlated_noise():
              '^:', color=colors['low_cost'], 
              linewidth=1.2, markersize=4, label='Mismodel penalty')
     
-    ax2.set_xlabel('Correlation Coefficient ρ')
+    # Add risk zone shading
+    ax2.axvspan(0.8, 0.95, alpha=0.2, color='red', label='High risk')
+    
+    ax2.set_xlabel('Correlation Strength ρ')
     ax2.set_ylabel('CRLB Trace Ratio')
     ax2.set_title('(b) Impact of Correlation')
     ax2.axhline(y=1, color='k', linestyle='--', alpha=0.3, linewidth=0.5)
     ax2.legend(loc='best', fontsize=6)
     ax2.grid(True, alpha=0.3)
+    ax2.set_ylim([0.2, 2.5])
     
     # Subplot 3: Correlation matrix visualization
     ax3 = axes[2]
     
-    # Show actual correlation structure for 6 links
+    # Show rank-1 structure
     n_show = 6
-    C_show = np.eye(n_show)
-    # Create realistic correlation for first 6 links of a 4-satellite network
-    show_links = [(0,1), (0,2), (0,3), (1,2), (1,3), (2,3)]
-    for i in range(n_show):
-        for j in range(i+1, n_show):
-            link_i = show_links[i]
-            link_j = show_links[j]
-            if (link_i[0] == link_j[0] or link_i[0] == link_j[1] or 
-                link_i[1] == link_j[0] or link_i[1] == link_j[1]):
-                C_show[i,j] = 0.5
-                C_show[j,i] = 0.5
+    A_show = np.array([[1,1,0,0,0,0],  # Link 0-1
+                      [1,0,1,0,0,0],  # Link 0-2
+                      [1,0,0,1,0,0],  # Link 0-3
+                      [0,1,1,0,0,0],  # Link 1-2
+                      [0,1,0,1,0,0],  # Link 1-3
+                      [0,0,1,1,0,0]]) # Link 2-3
     
-    im = ax3.imshow(C_show, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
-    ax3.set_title('(c) Block Correlation Structure')
+    C_show = 0.3 * np.eye(n_show) + 0.7 * (A_show @ A_show.T) / 2
+    
+    im = ax3.imshow(C_show, cmap='RdBu_r', vmin=0, vmax=1, aspect='auto')
+    ax3.set_title('(c) Rank-1 Clock Correlation')
     ax3.set_xlabel('Measurement Index')
     ax3.set_ylabel('Measurement Index')
     
@@ -764,8 +770,8 @@ def u4_correlated_noise():
     plt.close()
     
     print(f"✓ Saved: u4_correlated_noise.png/pdf")
-    print(f"✓ Position-space D-optimal metric (realistic scale)")
-    print(f"✓ Strong correlation effects visible")
+    print(f"✓ Rank-1 clock model with strong correlation effects")
+    print(f"✓ Variance-preserving correlation structure")
     
     return True
 
@@ -1003,7 +1009,7 @@ def u5_opportunistic_sensing():
 def analyze_geometric_sensitivity():
     """
     Analyze constellation geometry impact on USER POSITIONING performance.
-    Fixed to compute proper user-to-satellite GDOP.
+    Fixed to include Random configuration's minimum eigenvalue.
     """
     print("\n" + "="*60)
     print("Analyzing Geometric Sensitivity (User Positioning GDOP)")
@@ -1028,12 +1034,13 @@ def analyze_geometric_sensitivity():
                      'gdop_std': [], 'cond': [], 'min_eig': []} 
               for name in configs.keys()}
     results['Random'] = {'gdop': [], 'pdop': [], 'hdop': [], 'vdop': [],
-                        'gdop_std': [], 'cond': [], 'min_eig': []}
+                        'gdop_std': [], 'cond': [], 'min_eig': [], 'min_eig_std': []}
     
     n_sats_range = [4, 5, 6, 7, 8]
     sigma_r = 0.001  # 1 mm ranging accuracy
     
     for n_sats in n_sats_range:
+        # Deterministic configurations
         for config_name, config_func in configs.items():
             sat_positions = config_func(n_sats)
             
@@ -1082,10 +1089,12 @@ def analyze_geometric_sensitivity():
             except np.linalg.LinAlgError:
                 results[config_name]['gdop'].append(np.inf)
         
-        # Random configuration with Monte Carlo
+        # Random configuration with Monte Carlo (INCLUDING MIN_EIG)
         gdop_mc = []
         hdop_mc = []
         vdop_mc = []
+        min_eig_mc = []  # Added for minimum eigenvalue tracking
+        cond_mc = []
         
         for _ in range(n_mc_runs):
             sat_positions = []
@@ -1118,6 +1127,12 @@ def analyze_geometric_sensitivity():
                     gdop_mc.append(np.sqrt(np.trace(crlb)) / sigma_r)
                     hdop_mc.append(np.sqrt(crlb[0,0] + crlb[1,1]) / sigma_r)
                     vdop_mc.append(np.sqrt(crlb[2,2]) / sigma_r)
+                    
+                    # Calculate minimum eigenvalue for Random
+                    eigenvals = np.linalg.eigvalsh(J)
+                    min_eig = np.min(eigenvals[eigenvals > 1e-10])
+                    min_eig_mc.append(min_eig)
+                    cond_mc.append(np.linalg.cond(J))
                 except:
                     pass
         
@@ -1126,6 +1141,13 @@ def analyze_geometric_sensitivity():
             results['Random']['hdop'].append(np.mean(hdop_mc))
             results['Random']['vdop'].append(np.mean(vdop_mc))
             results['Random']['gdop_std'].append(np.std(gdop_mc))
+            results['Random']['cond'].append(np.mean(cond_mc))
+            # Add minimum eigenvalue statistics
+            results['Random']['min_eig'].append(np.mean(min_eig_mc))
+            results['Random']['min_eig_std'].append(np.std(min_eig_mc))
+        else:
+            results['Random']['gdop'].append(np.nan)
+            results['Random']['min_eig'].append(np.nan)
     
     # Create visualization
     fig, axes = plt.subplots(1, 3, figsize=(9, 2.625))
@@ -1169,13 +1191,20 @@ def analyze_geometric_sensitivity():
     ax2.grid(True, alpha=0.3)
     ax2.axhline(y=1, color='k', linestyle='--', alpha=0.3, label='Balanced')
     
-    # Plot 3: Minimum Eigenvalue
+    # Plot 3: Minimum Eigenvalue (NOW INCLUDING RANDOM)
     ax3 = axes[2]
     for config_name, metrics in results.items():
         if len(metrics['min_eig']) > 0 and not all(np.isnan(metrics['min_eig'])):
             x = n_sats_range[:len(metrics['min_eig'])]
-            ax3.semilogy(x, metrics['min_eig'], '^-', 
-                        label=config_name, markersize=5)
+            y = metrics['min_eig']
+            
+            if config_name == 'Random' and 'min_eig_std' in metrics:
+                # Plot with error bars for Random
+                yerr = metrics.get('min_eig_std', [0]*len(y))
+                ax3.errorbar(x, y, yerr=yerr, fmt='^-', 
+                           label=config_name, markersize=5, capsize=3)
+            else:
+                ax3.semilogy(x, y, '^-', label=config_name, markersize=5)
     
     ax3.set_xlabel('Number of Satellites')
     ax3.set_ylabel('Min Eigenvalue of FIM')
@@ -1197,16 +1226,16 @@ def analyze_geometric_sensitivity():
     plt.close()
     
     print(f"✓ Saved: geometric_sensitivity.png/pdf")
-    print(f"✓ GDOP values in reasonable range (1-10)")
+    print(f"✓ Random configuration now included in all subplots")
     
     return True
 
 def create_regime_map():
     """
-    Create 2D regime map with corrected phase noise boundary calculation.
+    Create 2D regime map with clear color legend for four regimes.
     """
     print("\n" + "="*60)
-    print("Creating Regime Map with Analytical Boundaries")
+    print("Creating Regime Map with Clear Legends")
     print("="*60)
     
     # Parameter ranges
@@ -1248,72 +1277,86 @@ def create_regime_map():
             # Phase noise floor variance
             phase_var = (c / (2 * np.pi * f_c))**2 * sigma_phi_sq
             
-            # Total variance (take maximum of waveform and phase noise)
+            # Total variance
             total_var = waveform_var + phase_var
             rmse = np.sqrt(total_var) * 1000  # Convert to mm
             rmse_map[i, j] = rmse
             
-            # Determine dominant regime based on denominators
+            # Determine dominant regime
             noise_term = 1.0
             hardware_term = snr_linear * gamma
             interference_term = normalized_interference
             
-            # Check if phase noise dominates (compare variances directly)
-            if phase_var > 0.5 * waveform_var:  # Phase noise dominates when it's > 50% of waveform
-                dominant = 3
+            # Phase noise dominance check
+            if phase_var > 0.5 * waveform_var:
+                dominant = 3  # Phase noise
             elif interference_term > max(noise_term, hardware_term):
-                dominant = 2
+                dominant = 2  # Interference
             elif hardware_term > noise_term:
-                dominant = 1
+                dominant = 1  # Hardware
             else:
-                dominant = 0
+                dominant = 0  # Noise
             
             regime_map[i, j] = dominant
     
-    # Calculate accurate phase noise boundary
-    # Phase noise equals waveform noise when:
-    # c²/(8π²β²SNR) = (c/2πf_c)²σ_φ²
-    # Solving for SNR: SNR = f_c²/(4β²σ_φ²)
+    # Calculate analytical boundaries
     phase_snr_threshold = (f_c**2) / (4 * beta_rms**2 * sigma_phi_sq)
     phase_snr_threshold_db = 10*np.log10(phase_snr_threshold)
     
     # Create figure
     fig, axes = plt.subplots(1, 2, figsize=(7, 3))
     
-    # Subplot 1: Regime map
+    # Subplot 1: Regime map with clear color legend
     ax1 = axes[0]
     
     from matplotlib.colors import ListedColormap
+    from matplotlib.patches import Patch
+    
     regime_colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D']
     regime_cmap = ListedColormap(regime_colors)
+    regime_labels = ['Noise-Limited', 'Hardware-Limited', 
+                     'Interference-Limited', 'Phase-Noise-Limited']
     
     im1 = ax1.contourf(snr_db_range, gamma_range, regime_map, 
                        levels=[-0.5, 0.5, 1.5, 2.5, 3.5],
                        cmap=regime_cmap, alpha=0.7)
     
-    # Add analytical boundaries
-    # Noise = Hardware: SNR·Γ = 1
+    # Add analytical boundaries with thicker lines
     snr_nh_boundary = 1 / gamma_range
     snr_nh_boundary_db = 10 * np.log10(snr_nh_boundary)
     ax1.plot(snr_nh_boundary_db, gamma_range, 'k--', 
-            linewidth=1.5, label='Noise=Hardware', alpha=0.8)
+            linewidth=2, label='Noise=Hardware', alpha=0.9)
     
-    # Hardware = Interference: Γ = α̃
     ax1.axhline(y=alpha_tilde, color='k', linestyle=':', 
-               linewidth=1.5, label=f'Hardware=Interference (α̃={alpha_tilde:.3f})', alpha=0.8)
+               linewidth=2, label=f'Hardware=Interference', alpha=0.9)
     
-    # Phase noise boundary (corrected)
     ax1.axvline(x=phase_snr_threshold_db, color='k', linestyle='-.', 
-               linewidth=1.5, label=f'Phase Floor (SNR={phase_snr_threshold_db:.1f} dB)', alpha=0.8)
+               linewidth=2, label=f'Phase Floor', alpha=0.9)
+    
+    # Add color patches for regime legend
+    regime_patches = [Patch(facecolor=regime_colors[i], alpha=0.7, 
+                           label=regime_labels[i]) for i in range(4)]
+    
+    # Create two separate legends
+    legend1 = ax1.legend(handles=regime_patches, loc='upper left', 
+                        fontsize=5, title='Regimes')
+    ax1.add_artist(legend1)
+    
+    # Boundary lines legend
+    ax1.legend(loc='lower right', fontsize=5, title='Boundaries')
     
     ax1.set_xlabel('Pre-impairment SNR (dB)')
     ax1.set_ylabel('Hardware Quality Factor Γ')
     ax1.set_yscale('log')
     ax1.set_title('(a) Operating Regime Map')
     ax1.grid(True, alpha=0.3)
-    ax1.legend(loc='lower right', fontsize=5)
     
-    # Subplot 2: RMSE heatmap with 10mm contour highlight
+    # Add text annotations for boundaries
+    ax1.text(15, 2e-3, 'Noise\nDominates', fontsize=5, ha='center', color='white')
+    ax1.text(35, 2e-2, 'Hardware\nDominates', fontsize=5, ha='center', color='white')
+    ax1.text(45, 2e-3, 'Phase\nFloor', fontsize=5, ha='center', color='white')
+    
+    # Subplot 2: RMSE heatmap
     ax2 = axes[1]
     
     rmse_log = np.log10(np.maximum(rmse_map, 1e-3))
@@ -1330,7 +1373,7 @@ def create_regime_map():
     # Highlight 10mm contour
     cs2_10mm = ax2.contour(snr_db_range, gamma_range, rmse_map,
                            levels=[10], colors='yellow', 
-                           linewidths=2, alpha=1.0)
+                           linewidths=2.5, alpha=1.0)
     
     ax2.clabel(cs2, inline=True, fontsize=6, fmt='%g mm')
     
@@ -1344,12 +1387,15 @@ def create_regime_map():
     cbar.set_label('log₁₀(RMSE) [mm]', fontsize=8)
     cbar.ax.tick_params(labelsize=7)
     
-    # Add text box with parameters and 10mm note
-    textstr = f'Interference: α̃={alpha_tilde:.3f}\n'
-    textstr += f'Phase noise: σ_φ²={sigma_phi_sq:.3f}\n'
-    textstr += f'Yellow contour: 10 mm RMSE'
+    # Add parameter box
+    textstr = f'Parameters:\n'
+    textstr += f'α̃ = {alpha_tilde:.3f}\n'
+    textstr += f'σ_φ² = {sigma_phi_sq:.3f}\n'
+    textstr += f'f_c = {f_c/1e9:.0f} GHz\n'
+    textstr += f'BW = {bandwidth/1e9:.0f} GHz\n'
+    textstr += 'Yellow: 10 mm RMSE'
     props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-    ax2.text(0.02, 0.02, textstr, transform=ax2.transAxes, fontsize=6,
+    ax2.text(0.02, 0.02, textstr, transform=ax2.transAxes, fontsize=5,
             verticalalignment='bottom', bbox=props)
     
     plt.tight_layout()
@@ -1358,16 +1404,17 @@ def create_regime_map():
     plt.close()
     
     print(f"✓ Saved: regime_map.png/pdf")
-    print(f"✓ Phase noise boundary at SNR={phase_snr_threshold_db:.1f} dB (corrected)")
+    print(f"✓ Clear color legend for four regimes")
+    print(f"✓ Phase noise boundary at SNR={phase_snr_threshold_db:.1f} dB")
     
     return True
 
 def create_ioo_parameter_surface():
     """
-    Create 3D parameter surface with minimum SINR feasibility boundary.
+    Create 3D parameter surface with NaN for infeasible regions.
     """
     print("\n" + "="*60)
-    print("Creating IoO Parameter Surface with Feasibility Boundaries")
+    print("Creating IoO Parameter Surface with Clear Boundaries")
     print("="*60)
     
     # Parameter ranges
@@ -1378,14 +1425,15 @@ def create_ioo_parameter_surface():
     target_pos = np.array([7000e3, 0, 1000e3])
     rx_pos = np.array([7000e3, 0, 0])
     
-    # Feasibility thresholds
-    min_sinr_db = -20  # Minimum usable SINR
-    max_variance_m2 = 1.0  # Maximum acceptable variance
+    # Relaxed feasibility thresholds
+    min_sinr_db = -30  # More permissive minimum SINR
+    max_variance_m2 = 5.0  # Allow larger variance
     
     info_gain_matrix = np.zeros((len(bistatic_angles), len(processing_gains_db)))
     feasibility_matrix = np.zeros((len(bistatic_angles), len(processing_gains_db)))
     
-    J_prior = np.diag([10, 10, 0.1])
+    # Weaker prior for better visibility
+    J_prior = np.diag([1, 1, 0.01])  # Much weaker prior
     
     for i, angle_deg in enumerate(bistatic_angles):
         for j, pg_db in enumerate(processing_gains_db):
@@ -1416,7 +1464,7 @@ def create_ioo_parameter_surface():
             
             # Check feasibility
             if sinr_ioo_db > min_sinr_db:
-                feasibility_matrix[i, j] = 1
+                feasibility_matrix[i, j] = 1  # SINR feasible
                 
                 if sinr_ioo > 1e-6:
                     variance_ioo = calculate_bistatic_measurement_variance(
@@ -1425,7 +1473,7 @@ def create_ioo_parameter_surface():
                     if variance_ioo < max_variance_m2:
                         feasibility_matrix[i, j] = 2  # Fully feasible
                 else:
-                    variance_ioo = 1.0
+                    variance_ioo = 10.0  # Large variance for low SINR
                 
                 J_ioo = calculate_j_ioo(geometry.gradient, variance_ioo)
                 J_post = J_prior + J_ioo
@@ -1440,10 +1488,10 @@ def create_ioo_parameter_surface():
                     info_gain_db = 10 * (np.log10(det_prior) - np.log10(det_post))
                     info_gain_matrix[i, j] = min(info_gain_db, 50)
                 except:
-                    info_gain_matrix[i, j] = 0
+                    info_gain_matrix[i, j] = np.nan  # Use NaN for numerical issues
             else:
                 feasibility_matrix[i, j] = 0
-                info_gain_matrix[i, j] = 0
+                info_gain_matrix[i, j] = np.nan  # Use NaN for infeasible regions
     
     # Create visualization
     fig = plt.figure(figsize=(7, 3))
@@ -1451,7 +1499,11 @@ def create_ioo_parameter_surface():
     # 3D surface plot
     ax = fig.add_subplot(121, projection='3d')
     X, Y = np.meshgrid(processing_gains_db, bistatic_angles)
-    surf = ax.plot_surface(X, Y, info_gain_matrix, cmap='viridis',
+    
+    # Mask NaN values for surface plot
+    Z = np.ma.masked_invalid(info_gain_matrix)
+    
+    surf = ax.plot_surface(X, Y, Z, cmap='viridis',
                            alpha=0.8, edgecolor='none')
     
     ax.set_xlabel('Processing Gain (dB)', fontsize=8)
@@ -1466,37 +1518,42 @@ def create_ioo_parameter_surface():
     # 2D contour plot with feasibility boundaries
     ax2 = fig.add_subplot(122)
     
-    # Plot info gain contours
+    # Plot info gain contours (NaN-aware)
     cs = ax2.contourf(processing_gains_db, bistatic_angles, 
-                      info_gain_matrix, levels=20, cmap='viridis')
+                      info_gain_matrix, levels=20, cmap='viridis',
+                      extend='both')
     
-    cs2 = ax2.contour(processing_gains_db, bistatic_angles, 
-                      info_gain_matrix, levels=[5, 10, 20, 30, 40],
-                      colors='white', linewidths=0.5, alpha=0.8)
-    ax2.clabel(cs2, inline=True, fontsize=6, fmt='%g dB')
+    # Only plot contours where data exists
+    valid_mask = ~np.isnan(info_gain_matrix)
+    if np.sum(valid_mask) > 10:
+        cs2 = ax2.contour(processing_gains_db, bistatic_angles, 
+                         info_gain_matrix, levels=[5, 10, 20, 30, 40],
+                         colors='white', linewidths=0.5, alpha=0.8)
+        ax2.clabel(cs2, inline=True, fontsize=6, fmt='%g dB')
     
-    # Add feasibility boundary
+    # Add feasibility boundaries
     cs3 = ax2.contour(processing_gains_db, bistatic_angles,
                       feasibility_matrix, levels=[0.5, 1.5],
                       colors=['red', 'yellow'], linewidths=2)
     
-    # Mark feasible region
-    ax2.axhspan(60, 120, alpha=0.2, color='green')
-    ax2.axvspan(50, 80, alpha=0.2, color='green')
+    # Mark practical operating region
+    ax2.axhspan(60, 120, alpha=0.1, color='green')
+    ax2.axvspan(50, 80, alpha=0.1, color='green')
     
     ax2.set_xlabel('Processing Gain (dB)', fontsize=8)
     ax2.set_ylabel('Bistatic Angle (deg)', fontsize=8)
     ax2.set_title('(b) Feasible Operating Region', fontsize=9)
     ax2.grid(True, alpha=0.3)
     
-    # Add legend for boundaries
-    textstr = 'Boundaries:\n'
-    textstr += f'Red: SINR > {min_sinr_db} dB\n'
-    textstr += f'Yellow: σ² < {max_variance_m2} m²\n'
-    textstr += 'Green: Practical region'
-    props = dict(boxstyle='round', facecolor='white', alpha=0.7)
-    ax2.text(0.98, 0.02, textstr, transform=ax2.transAxes, fontsize=6,
-            verticalalignment='bottom', horizontalalignment='right', bbox=props)
+    # Enhanced legend with clear explanations
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='red', alpha=0.3, label=f'SINR < {min_sinr_db} dB'),
+        Patch(facecolor='yellow', alpha=0.3, label=f'σ² > {max_variance_m2} m²'),
+        Patch(facecolor='green', alpha=0.2, label='Practical region'),
+        Patch(facecolor='gray', alpha=0.3, label='Infeasible (NaN)')
+    ]
+    ax2.legend(handles=legend_elements, loc='upper right', fontsize=6)
     
     plt.tight_layout()
     plt.savefig(f'{args.output_dir}/ioo_parameter_surface.png', dpi=300, bbox_inches='tight')
@@ -1504,7 +1561,7 @@ def create_ioo_parameter_surface():
     plt.close()
     
     print(f"✓ Saved: ioo_parameter_surface.png/pdf")
-    print(f"✓ Feasibility boundaries clearly marked")
+    print(f"✓ Using NaN for infeasible regions, clearer visualization")
     
     return True
 
