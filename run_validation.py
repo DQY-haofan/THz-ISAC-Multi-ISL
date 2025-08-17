@@ -1624,7 +1624,7 @@ def create_ioo_parameter_surface():
     
     print(f"✓ Saved: ioo_surface_3d.png/pdf")
     
-    # ========== FIGURE 2: 2D Feasibility Map ==========
+    # ========== FIGURE 2: 2D Feasibility Map (ADJUSTED LAYOUT) ==========
     fig2 = plt.figure(figsize=(5, 4))
     ax = fig2.add_subplot(111)
     
@@ -1653,7 +1653,7 @@ def create_ioo_parameter_surface():
     ax.axhspan(60, 120, alpha=0.1, color='green')
     ax.axvspan(50, 80, alpha=0.1, color='green')
     
-    # Add legend explaining boundaries
+    # Add legend explaining boundaries (MOVED TO UPPER LEFT)
     from matplotlib.lines import Line2D
     legend_elements = [
         Line2D([0], [0], color='red', linewidth=2, 
@@ -1664,7 +1664,8 @@ def create_ioo_parameter_surface():
                label='Info gain contours'),
     ]
     
-    ax.legend(handles=legend_elements, loc='upper right', 
+    # Legend at upper left
+    ax.legend(handles=legend_elements, loc='upper left', 
              fontsize=7, framealpha=0.9)
     
     ax.set_xlabel('Processing Gain (dB)', fontsize=9)
@@ -1677,8 +1678,8 @@ def create_ioo_parameter_surface():
     cbar2.set_label('Information Gain (dB)', fontsize=8)
     cbar2.ax.tick_params(labelsize=7)
     
-    # Add text annotation for practical region
-    ax.text(65, 90, 'Practical\nRegion', fontsize=8, 
+    # Add text annotation for practical region (MOVED TO LEFT SIDE)
+    ax.text(40, 90, 'Practical\nRegion', fontsize=8, 
            ha='center', color='darkgreen', weight='bold',
            bbox=dict(boxstyle='round', facecolor='white', 
                     alpha=0.7, edgecolor='green'))
@@ -1692,6 +1693,7 @@ def create_ioo_parameter_surface():
     print(f"✓ Red line: SINR threshold ({min_sinr_db} dB)")
     print(f"✓ Yellow line: Variance threshold ({max_variance_m2} m²)")
     print(f"✓ White contours: Information gain levels")
+    print(f"✓ Legend at upper left, Practical Region on left side")
     
     return True
 
