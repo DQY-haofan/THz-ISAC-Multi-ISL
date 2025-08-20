@@ -32,6 +32,42 @@ from ioo import *
 # Command Line Interface
 # ==============================================================================
 
+# 在 import 语句后添加
+class DataRecorder:
+    """记录关键数据点用于论文引用"""
+    def __init__(self):
+        self.data = {}
+    
+    def add(self, category, key, value):
+        if category not in self.data:
+            self.data[category] = {}
+        self.data[category][key] = value
+    
+    def save_to_file(self, filename):
+        with open(filename, 'w') as f:
+            f.write("=" * 60 + "\n")
+            f.write("KEY DATA POINTS FOR PAPER REFERENCE\n")
+            f.write(f"Generated: {datetime.now().isoformat()}\n")
+            f.write("=" * 60 + "\n\n")
+            
+            for category, values in self.data.items():
+                f.write(f"[{category}]\n")
+                f.write("-" * 40 + "\n")
+                for key, value in values.items():
+                    if isinstance(value, (list, np.ndarray)):
+                        if len(value) <= 5:
+                            f.write(f"{key}: {value}\n")
+                        else:
+                            f.write(f"{key}: [first/last] [{value[0]:.4g}, {value[-1]:.4g}]\n")
+                    elif isinstance(value, float):
+                        f.write(f"{key}: {value:.4g}\n")
+                    else:
+                        f.write(f"{key}: {value}\n")
+                f.write("\n")
+
+# 创建全局数据记录器
+data_recorder = DataRecorder()
+
 def parse_arguments():
     """Parse command line arguments for reproducibility."""
     parser = argparse.ArgumentParser(
@@ -323,6 +359,14 @@ def u1_hardware_ceiling():
         
         # Store data
         data_to_save[name.replace(' ', '_').replace('-', '_')] = rmse_values
+        
+        # 记录关键数据点
+        if gamma_eff > 0:
+            ceiling = np.sqrt(SPEED_OF_LIGHT**2 * gamma_eff / (8*np.pi**2*(10e9/np.sqrt(12))**2)) * 1000
+            data_recorder.add('U1_Hardware_Ceiling', 
+                            f'{name}_ceiling_mm', ceiling)
+            data_recorder.add('U1_Hardware_Ceiling',
+                            f'{name}_RMSE_at_40dB_mm', rmse_values[20] if len(rmse_values) > 20 else None)
     
     # Add ceiling annotations
     for name, gamma_eff, color, _ in profiles[1:]:  # Skip ideal
@@ -333,7 +377,7 @@ def u1_hardware_ceiling():
     plt.xlabel('Pre-impairment SNR (dB)')
     plt.ylabel('Ranging RMSE (mm)')
     plt.title('Hardware-Limited Performance Ceiling')
-    plt.legend(loc='lower left', fontsize=7)  # Changed to lower left
+    plt.legend(loc='lower left', fontsize=7)
     plt.grid(True, alpha=0.3)
     plt.xlim([0, 48])
     plt.ylim([0.01, 100])
@@ -347,6 +391,7 @@ def u1_hardware_ceiling():
     print("✓ Verified: Performance saturates at hardware-determined ceiling")
     
     return True
+
 
 # ==============================================================================
 # U2: Phase Noise Floor Validation
@@ -397,9 +442,15 @@ def u2_phase_noise_floor():
                     linestyle=linestyle, color=color, linewidth=1.2,
                     label=name)
         
-        # Add floor annotations for non-zero phase noise
+        # 记录关键数据点
         if sigma_phi_sq > 0:
             floor = SPEED_OF_LIGHT * np.sqrt(sigma_phi_sq) / (2*np.pi*f_c) * 1000  # mm
+            data_recorder.add('U2_Phase_Noise_Floor', 
+                            f'{name.replace(" ", "_")}_floor_mm', floor)
+            data_recorder.add('U2_Phase_Noise_Floor',
+                            f'{name.replace(" ", "_")}_RMSE_at_60dB_mm', 
+                            rmse_values[30] if len(rmse_values) > 30 else None)
+            
             plt.axhline(y=floor, color=color, linestyle=':', alpha=0.3, linewidth=0.5)
             plt.text(68, floor*1.5, f'{floor:.1f} mm', 
                     fontsize=6, color=color, ha='right')
@@ -822,6 +873,22 @@ def u4_correlated_noise():
     
     print(f"✓ Saved: u4_correlated_noise.png/pdf")
     print(f"✓ Added 'Must model correlation' annotation")
+    # 在 return True 之前添加
+    # 记录关键数据点
+    data_recorder.add('U4_Correlated_Noise', 
+                     'clock_variance_ratio', clock_variance_ratio)
+    data_recorder.add('U4_Correlated_Noise',
+                     'n_satellites_range', n_satellites_range.tolist())
+    data_recorder.add('U4_Correlated_Noise',
+                     'd_optimal_independent_at_6sats_dB', 
+                     d_optimal_independent[-1] if len(d_optimal_independent) > 0 else None)
+    data_recorder.add('U4_Correlated_Noise',
+                     'd_optimal_correlated_at_6sats_dB',
+                     d_optimal_correlated[-1] if len(d_optimal_correlated) > 0 else None)
+    data_recorder.add('U4_Correlated_Noise',
+                     'critical_rho_for_modeling', critical_rho if critical_rho else 0.8)
+    data_recorder.add('U4_Correlated_Noise',
+                     'max_mismodel_penalty', max(mismodel_penalty))
     
     return True
 
@@ -1101,6 +1168,23 @@ def u5_opportunistic_sensing():
     print(f"✓ Cleaner visualization without overlapping text")
     print(f"✓ Legend placement and font size optimized")
     
+    # 在 return info_gain_db > 3 之前添加
+    # 记录关键数据点
+    data_recorder.add('U5_Opportunistic_Sensing',
+                     'IoO_SINR_dB', sinr_ioo_db)
+    data_recorder.add('U5_Opportunistic_Sensing',
+                     'required_SINR_for_6dB_gain_dB', sinr_needed_db)
+    data_recorder.add('U5_Opportunistic_Sensing',
+                     'prior_axes_m', axes3_prior.tolist())
+    data_recorder.add('U5_Opportunistic_Sensing',
+                     'post_axes_m', axes3_post.tolist())
+    data_recorder.add('U5_Opportunistic_Sensing',
+                     'information_gain_dB', info_gain_db)
+    data_recorder.add('U5_Opportunistic_Sensing',
+                     'processing_gain_used_dB', 10*np.log10(processing_gain))
+    data_recorder.add('U5_Opportunistic_Sensing',
+                     'antenna_gain_dBi', 10*np.log10(antenna_gain))
+    
     return info_gain_db > 3
 
 # ==============================================================================
@@ -1329,6 +1413,16 @@ def analyze_geometric_sensitivity():
     print(f"✓ Saved: geometric_sensitivity.png/pdf")
     print(f"✓ Random configuration now included in all subplots")
     
+    # 记录关键数据点
+    for config_name, metrics in results.items():
+        if len(metrics['gdop']) > 0:
+            data_recorder.add('Geometric_Sensitivity',
+                            f'{config_name}_GDOP_at_8sats', 
+                            metrics['gdop'][-1] if not np.isnan(metrics['gdop'][-1]) else None)
+            if 'min_eig' in metrics and len(metrics['min_eig']) > 0:
+                data_recorder.add('Geometric_Sensitivity',
+                                f'{config_name}_min_eigenvalue_at_8sats',
+                                metrics['min_eig'][-1] if not np.isnan(metrics['min_eig'][-1]) else None)
     return True
 
 def create_regime_map():
@@ -1762,6 +1856,9 @@ def main():
     for filename in sorted(os.listdir(args.output_dir)):
         size = os.path.getsize(f'{args.output_dir}/{filename}') / 1024
         print(f"  - {filename} ({size:.1f} KB)")
+    
+    data_recorder.save_to_file(f'{args.output_dir}/key_data_points.txt')
+    print(f"\n✓ Key data points saved to: {args.output_dir}/key_data_points.txt")
     
     return all_passed
 
