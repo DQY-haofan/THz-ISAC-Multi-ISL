@@ -400,7 +400,7 @@ def u1_hardware_ceiling():
 def u2_phase_noise_floor():
     """
     U2: Demonstrate irreducible error floor due to phase noise.
-    Enhanced with higher phase noise values to clearly show floor.
+    Enhanced with accurate floor calculation and recording.
     """
     print("\n" + "="*60)
     print("U2: Phase Noise Floor Validation")
@@ -442,17 +442,29 @@ def u2_phase_noise_floor():
                     linestyle=linestyle, color=color, linewidth=1.2,
                     label=name)
         
-        # 记录关键数据点
+        # 记录关键数据点 - 修正计算
         if sigma_phi_sq > 0:
-            floor = SPEED_OF_LIGHT * np.sqrt(sigma_phi_sq) / (2*np.pi*f_c) * 1000  # mm
+            # 理论floor值
+            floor_theoretical = SPEED_OF_LIGHT * np.sqrt(sigma_phi_sq) / (2*np.pi*f_c) * 1000
+            # 实际达到的floor值（高SNR时的RMSE）
+            floor_actual = rmse_values[-1] if len(rmse_values) > 0 else None
+            
             data_recorder.add('U2_Phase_Noise_Floor', 
-                            f'{name.replace(" ", "_")}_floor_mm', floor)
+                            f'{name.replace(" ", "_")}_floor_theoretical_mm', floor_theoretical)
+            data_recorder.add('U2_Phase_Noise_Floor', 
+                            f'{name.replace(" ", "_")}_floor_actual_mm', floor_actual)
+            data_recorder.add('U2_Phase_Noise_Floor',
+                            f'{name.replace(" ", "_")}_RMSE_at_20dB_mm', 
+                            rmse_values[10] if len(rmse_values) > 10 else None)
+            data_recorder.add('U2_Phase_Noise_Floor',
+                            f'{name.replace(" ", "_")}_RMSE_at_40dB_mm', 
+                            rmse_values[20] if len(rmse_values) > 20 else None)
             data_recorder.add('U2_Phase_Noise_Floor',
                             f'{name.replace(" ", "_")}_RMSE_at_60dB_mm', 
                             rmse_values[30] if len(rmse_values) > 30 else None)
             
-            plt.axhline(y=floor, color=color, linestyle=':', alpha=0.3, linewidth=0.5)
-            plt.text(68, floor*1.5, f'{floor:.1f} mm', 
+            plt.axhline(y=floor_theoretical, color=color, linestyle=':', alpha=0.3, linewidth=0.5)
+            plt.text(68, floor_theoretical*1.5, f'{floor_theoretical:.1f} mm', 
                     fontsize=6, color=color, ha='right')
     
     plt.xlabel('Pre-impairment SNR (dB)')
@@ -873,24 +885,42 @@ def u4_correlated_noise():
     
     print(f"✓ Saved: u4_correlated_noise.png/pdf")
     print(f"✓ Added 'Must model correlation' annotation")
-    # 在 return True 之前添加
-    # 记录关键数据点
+
     data_recorder.add('U4_Correlated_Noise', 
                      'clock_variance_ratio', clock_variance_ratio)
     data_recorder.add('U4_Correlated_Noise',
                      'n_satellites_range', n_satellites_range.tolist())
-    data_recorder.add('U4_Correlated_Noise',
-                     'd_optimal_independent_at_6sats_dB', 
-                     d_optimal_independent[-1] if len(d_optimal_independent) > 0 else None)
-    data_recorder.add('U4_Correlated_Noise',
-                     'd_optimal_correlated_at_6sats_dB',
-                     d_optimal_correlated[-1] if len(d_optimal_correlated) > 0 else None)
+    
+    # 记录信息损失（dB）
+    if len(d_optimal_independent) > 0 and len(d_optimal_correlated) > 0:
+        info_loss_dB = d_optimal_independent[-1] - d_optimal_correlated[-1]
+        data_recorder.add('U4_Correlated_Noise',
+                         'info_loss_at_6sats_dB', info_loss_dB)
+        data_recorder.add('U4_Correlated_Noise',
+                         'd_optimal_independent_at_6sats_dB', 
+                         d_optimal_independent[-1])
+        data_recorder.add('U4_Correlated_Noise',
+                         'd_optimal_correlated_at_6sats_dB',
+                         d_optimal_correlated[-1])
+    
+    # 记录VDOP/HDOP degradation
+    if len(a_optimal_vs_ratio) > 0:
+        data_recorder.add('U4_Correlated_Noise',
+                         'a_optimal_at_rho_0', a_optimal_vs_ratio[0])
+        data_recorder.add('U4_Correlated_Noise',
+                         'a_optimal_at_rho_0.9', 
+                         a_optimal_vs_ratio[-2] if len(a_optimal_vs_ratio) > 1 else None)
+    
     data_recorder.add('U4_Correlated_Noise',
                      'critical_rho_for_modeling', critical_rho if critical_rho else 0.8)
     data_recorder.add('U4_Correlated_Noise',
                      'max_mismodel_penalty', max(mismodel_penalty))
+    data_recorder.add('U4_Correlated_Noise',
+                     'penalty_at_rho_0.75', 
+                     mismodel_penalty[np.argmin(np.abs(rho_eff - 0.75))])
     
     return True
+
 
 # ==============================================================================
 # U5: Opportunistic Sensing (with axis annotations)
@@ -1168,8 +1198,16 @@ def u5_opportunistic_sensing():
     print(f"✓ Cleaner visualization without overlapping text")
     print(f"✓ Legend placement and font size optimized")
     
-    # 在 return info_gain_db > 3 之前添加
-    # 记录关键数据点
+# 在processing gain sweep部分找到3dB和6dB阈值
+    threshold_3dB = None
+    threshold_6dB = None
+    for i, (pg, gain) in enumerate(zip(pg_range_db, info_gains)):
+        if threshold_3dB is None and gain >= 3:
+            threshold_3dB = pg
+        if threshold_6dB is None and gain >= 6:
+            threshold_6dB = pg
+    
+    # 在 return 之前添加
     data_recorder.add('U5_Opportunistic_Sensing',
                      'IoO_SINR_dB', sinr_ioo_db)
     data_recorder.add('U5_Opportunistic_Sensing',
@@ -1184,6 +1222,13 @@ def u5_opportunistic_sensing():
                      'processing_gain_used_dB', 10*np.log10(processing_gain))
     data_recorder.add('U5_Opportunistic_Sensing',
                      'antenna_gain_dBi', 10*np.log10(antenna_gain))
+    data_recorder.add('U5_Opportunistic_Sensing',
+                     'processing_gain_3dB_threshold', threshold_3dB)
+    data_recorder.add('U5_Opportunistic_Sensing',
+                     'processing_gain_6dB_threshold', threshold_6dB)
+    data_recorder.add('U5_Opportunistic_Sensing',
+                     'error_reduction_percent', 
+                     (1 - axes3_post[0]/axes3_prior[0]) * 100)
     
     return info_gain_db > 3
 
@@ -1416,14 +1461,31 @@ def analyze_geometric_sensitivity():
     # 记录关键数据点
     for config_name, metrics in results.items():
         if len(metrics['gdop']) > 0:
-            data_recorder.add('Geometric_Sensitivity',
-                            f'{config_name}_GDOP_at_8sats', 
-                            metrics['gdop'][-1] if not np.isnan(metrics['gdop'][-1]) else None)
-            if 'min_eig' in metrics and len(metrics['min_eig']) > 0:
-                data_recorder.add('Geometric_Sensitivity',
-                                f'{config_name}_min_eigenvalue_at_8sats',
-                                metrics['min_eig'][-1] if not np.isnan(metrics['min_eig'][-1]) else None)
+            # 记录所有卫星数量的GDOP
+            for i, n_sat in enumerate(n_sats_range[:len(metrics['gdop'])]):
+                if not np.isnan(metrics['gdop'][i]):
+                    data_recorder.add('Geometric_Sensitivity',
+                                    f'{config_name}_GDOP_{n_sat}sats', 
+                                    metrics['gdop'][i])
+            
+            # 记录HDOP和VDOP
+            if len(metrics['hdop']) > 0 and len(metrics['vdop']) > 0:
+                for i, n_sat in enumerate(n_sats_range[:len(metrics['hdop'])]):
+                    if not np.isnan(metrics['hdop'][i]) and not np.isnan(metrics['vdop'][i]):
+                        vdop_hdop_ratio = metrics['vdop'][i] / metrics['hdop'][i]
+                        data_recorder.add('Geometric_Sensitivity',
+                                        f'{config_name}_VDOP_HDOP_ratio_{n_sat}sats',
+                                        vdop_hdop_ratio)
+                        data_recorder.add('Geometric_Sensitivity',
+                                        f'{config_name}_HDOP_{n_sat}sats',
+                                        metrics['hdop'][i])
+                        data_recorder.add('Geometric_Sensitivity',
+                                        f'{config_name}_VDOP_{n_sat}sats',
+                                        metrics['vdop'][i])
+    
     return True
+
+
 
 def create_regime_map():
     """
